@@ -151,119 +151,12 @@ function FindBestPlacement(free_rects, width, height, clearance_gap, layout_mode
   return best_x, best_y, best_rotated, best_claimed
 end
 
---[[  -------------- ArrangeContours --------------------------------------------------
-|
-|  Best-effort single-sheet layout. Faces are placed largest first, into
-|  whichever free rectangle on the sheet fits them best (see
-|  FindBestPlacement/ReserveRect above). layout_mode controls which
-|  orientation(s) a piece may use: "Auto" (or nil) tries both the original
-|  and a 90 degree rotated orientation and uses whichever fits best,
-|  "Normal" never rotates a piece, and "Rotated" always rotates every piece
-|  90 degrees.
-|
-|  A face that doesn't fit anywhere on the sheet at all (even rotated) is
-|  still stacked above everything placed so far (including previous
-|  overhangs) and returned rather than aborting, so it overhangs the sheet
-|  and the user can adjust the job size or move it afterwards.
-|
-]]
-  function ArrangeContours(faces, clearance_gap, job_width, job_height, edge_margin, layout_mode)
-
-    local transformed_faces = {}
-
-    if #faces == 0 then
-      return transformed_faces
-    end
-
-    local usable_width  = job_width  - 2 * edge_margin
-    local usable_height = job_height - 2 * edge_margin
-
-    -- Place the biggest faces first so the small ones can backfill around them.
-    -- This only changes the order we place in; the faces are returned in their
-    -- original order so everything downstream is unaffected.
-    local order = {}
-    for i = 1, #faces do
-      local bounds = faces[i].contour.BoundingBox2D
-      order[#order + 1] = {
-        index = i,
-        long  = math.max(bounds.XLength, bounds.YLength),
-        short = math.min(bounds.XLength, bounds.YLength)
-      }
-    end
-
-    table.sort(order, function(a, b)
-      if a.long ~= b.long then return a.long > b.long end
-      if a.short ~= b.short then return a.short > b.short end
-      return a.index < b.index
-    end)
-
-    local free_rects = { { x = edge_margin, y = edge_margin, width = usable_width, height = usable_height } }
-    local overhang_y = edge_margin -- next clear y above everything placed so far, including overhangs
-
-    for i = 1, #order do
-      local face = faces[order[i].index]
-      local bounds = face.contour.BoundingBox2D
-      local width = bounds.XLength
-      local height = bounds.YLength
-
-      local x, y, rotated, claimed = FindBestPlacement(free_rects, width, height, clearance_gap, layout_mode)
-
-      if x ~= nil then
-        PlaceFaceAt(face, x, y, rotated)
-        ReserveRect(free_rects, claimed)
-        local placed_height = rotated and width or height
-        if y + placed_height + clearance_gap > overhang_y then
-          overhang_y = y + placed_height + clearance_gap
-        end
-      else
-        -- Doesn't fit anywhere on the sheet in an orientation layout_mode
-        -- allows. Stack it above everything placed so far and let it
-        -- overhang rather than failing.
-        local overhang_rotated = (layout_mode == "Rotated")
-        local overhang_height = overhang_rotated and width or height
-        PlaceFaceAt(face, edge_margin, overhang_y, overhang_rotated)
-        overhang_y = overhang_y + overhang_height + clearance_gap
-      end
-    end
-
-    for i = 1, #faces do
-      transformed_faces[#transformed_faces + 1] = faces[i]
-    end
-
-    return transformed_faces
-  end
-
-
---[[  -------------- ArrangeContoursToSheets ------------------------------------------
-|
-|  Sheet Management layout. Assigns each face to a sheet and positions it,
-|  then returns the faces (in their original order) and the number of
-|  sheets required.
-|
-|  For each face, every open sheet is tried in turn - earliest sheet first,
-|  so a face will backfill a gap on an earlier sheet rather than forcing a
-|  later one to open - via FindBestPlacement, which layout_mode controls
-|  the same way it does for ArrangeContours above ("Auto"/nil tries both
-|  orientations, "Normal" never rotates, "Rotated" always rotates). A new
-|  sheet is only opened once nothing already open can fit the face at all.
-|
-|  As with ArrangeContours, a face that is too big for the material is
-|  still laid out (overhanging its sheet) rather than aborting, so the user
-|  can adjust the job size afterwards.
-|
-]]
-function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, edge_margin, layout_mode)
-  local transformed_faces = {}
-  if #faces == 0 then
-    return transformed_faces, 1
-  end
-
-  local usable_width  = job_width  - 2 * edge_margin
-  local usable_height = job_height - 2 * edge_margin
-
-  -- Place the biggest faces first so the small ones can backfill around them.
-  -- This only changes the order we place in; the faces are returned in their
-  -- original order so everything downstream is unaffected.
+-- Places the biggest faces first so smaller ones can backfill around them.
+-- Returns a list of { index, long, short } sorted descending by long edge,
+-- then short edge, then original index. Shared by ArrangeContours and
+-- ArrangeContoursToSheets - the faces themselves are always returned in
+-- their original order regardless of this placement order.
+local function BuildPlacementOrder(faces)
   local order = {}
   for i = 1, #faces do
     local bounds = faces[i].contour.BoundingBox2D
@@ -280,11 +173,171 @@ function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, ed
     return a.index < b.index
   end)
 
+  return order
+end
+
+--[[  -------------- ArrangeContours --------------------------------------------------
+|
+|  Best-effort single-sheet layout. Faces are placed largest first, into
+|  whichever free rectangle on the sheet fits them best (see
+|  FindBestPlacement/ReserveRect above). layout_mode controls which
+|  orientation(s) a piece may use: "Normal" never rotates a piece, "Rotated"
+|  always rotates every piece 90 degrees, and "Auto" (or nil) tries all
+|  three of "Normal", "Rotated", and letting FindBestPlacement choose per
+|  piece, then keeps whichever result actually packs best (fewest
+|  overhanging faces, then the most compact). That per-piece choice on its
+|  own is a purely greedy, no-lookahead heuristic - it can rotate one piece
+|  in a way that looks locally better but breaks a uniform-grid tiling the
+|  other pieces could have formed, so it is only trusted once it has to beat
+|  the two fixed-orientation alternatives to be picked at all.
+|
+|  A face that doesn't fit anywhere on the sheet at all (even rotated) is
+|  still stacked above everything placed so far (including previous
+|  overhangs) and returned rather than aborting, so it overhangs the sheet
+|  and the user can adjust the job size or move it afterwards.
+|
+]]
+
+-- Computes (without moving any face) how ArrangeContours' single-sheet
+-- best-effort layout would place every face under one specific layout_mode
+-- ("Normal", "Rotated", or the per-piece "Auto" choice - never itself one of
+-- the three candidates ArrangeContours races). Returns a plan: the
+-- placements to apply, how many faces had to overhang (0 is ideal), and the
+-- vertical extent actually used (smaller is more compact) - see PickBestContoursPlan.
+local function ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  local free_rects = { { x = edge_margin, y = edge_margin, width = usable_width, height = usable_height } }
+  local overhang_y = edge_margin -- next clear y above everything placed so far, including overhangs
+  local overhang_count = 0
+  local max_extent_y = edge_margin
+  local placements = {}
+
+  for i = 1, #order do
+    local face = faces[order[i].index]
+    local bounds = face.contour.BoundingBox2D
+    local width = bounds.XLength
+    local height = bounds.YLength
+
+    local x, y, rotated, claimed = FindBestPlacement(free_rects, width, height, clearance_gap, layout_mode)
+
+    if x ~= nil then
+      ReserveRect(free_rects, claimed)
+      local placed_height = rotated and width or height
+      if y + placed_height + clearance_gap > overhang_y then
+        overhang_y = y + placed_height + clearance_gap
+      end
+      if y + placed_height > max_extent_y then
+        max_extent_y = y + placed_height
+      end
+      placements[#placements + 1] = { face = face, x = x, y = y, rotated = rotated }
+    else
+      -- Doesn't fit anywhere on the sheet in an orientation layout_mode
+      -- allows. Stack it above everything placed so far and let it
+      -- overhang rather than failing.
+      overhang_count = overhang_count + 1
+      local overhang_rotated = (layout_mode == "Rotated")
+      local overhang_height = overhang_rotated and width or height
+      placements[#placements + 1] = { face = face, x = edge_margin, y = overhang_y, rotated = overhang_rotated }
+      overhang_y = overhang_y + overhang_height + clearance_gap
+      if overhang_y > max_extent_y then
+        max_extent_y = overhang_y
+      end
+    end
+  end
+
+  return { placements = placements, overhang_count = overhang_count, max_extent_y = max_extent_y }
+end
+
+-- Picks the best of several ArrangeContours candidate plans: fewest
+-- overhanging faces first (overhanging means it didn't fit on the sheet at
+-- all in that plan's orientation), then the most compact (smallest vertical
+-- extent actually used) as a tiebreaker.
+local function PickBestContoursPlan(candidates)
+  local best = candidates[1]
+  for i = 2, #candidates do
+    local c = candidates[i]
+    if c.overhang_count < best.overhang_count
+       or (c.overhang_count == best.overhang_count and c.max_extent_y < best.max_extent_y) then
+      best = c
+    end
+  end
+  return best
+end
+
+function ArrangeContours(faces, clearance_gap, job_width, job_height, edge_margin, layout_mode)
+  if #faces == 0 then
+    return {}
+  end
+
+  local usable_width  = job_width  - 2 * edge_margin
+  local usable_height = job_height - 2 * edge_margin
+  local order = BuildPlacementOrder(faces)
+
+  local plan
+  if layout_mode == "Normal" or layout_mode == "Rotated" then
+    plan = ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  else
+    plan = PickBestContoursPlan({
+      ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Normal"),
+      ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Rotated"),
+      ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Auto"),
+    })
+  end
+
+  for i = 1, #plan.placements do
+    local p = plan.placements[i]
+    PlaceFaceAt(p.face, p.x, p.y, p.rotated)
+  end
+
+  local transformed_faces = {}
+  for i = 1, #faces do
+    transformed_faces[#transformed_faces + 1] = faces[i]
+  end
+
+  return transformed_faces
+end
+
+
+--[[  -------------- ArrangeContoursToSheets ------------------------------------------
+|
+|  Sheet Management layout. Assigns each face to a sheet and positions it,
+|  then returns the faces (in their original order) and the number of
+|  sheets required.
+|
+|  For each face, every open sheet is tried in turn - earliest sheet first,
+|  so a face will backfill a gap on an earlier sheet rather than forcing a
+|  later one to open - via FindBestPlacement. layout_mode controls which
+|  orientation(s) a piece may use the same way it does for ArrangeContours
+|  above: "Normal" never rotates, "Rotated" always rotates, and "Auto" (or
+|  nil) tries all three of "Normal", "Rotated", and letting FindBestPlacement
+|  choose per piece, then keeps whichever result actually needs fewer sheets
+|  (the real material/cutting cost), falling back to the more compact one if
+|  they tie - see ArrangeContours' header comment for why the per-piece
+|  choice alone isn't trusted by default. A new sheet is only opened once
+|  nothing already open can fit the face at all.
+|
+|  As with ArrangeContours, a face that is too big for the material is
+|  still laid out (overhanging its sheet) rather than aborting, so the user
+|  can adjust the job size afterwards.
+|
+]]
+
+-- Computes (without moving any face) how ArrangeContoursToSheets would
+-- assign every face to sheets and position it under one specific
+-- layout_mode ("Normal", "Rotated", or the per-piece "Auto" choice - never
+-- itself one of the three candidates ArrangeContoursToSheets races). Returns
+-- a plan: the placements to apply, how many sheets that took, and the total
+-- vertical extent actually used across them (smaller is more compact) - see
+-- PickBestSheetsPlan.
+local function ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
   local function NewSheet()
-    return { free_rects = { { x = edge_margin, y = edge_margin, width = usable_width, height = usable_height } } }
+    return {
+      free_rects = { { x = edge_margin, y = edge_margin, width = usable_width, height = usable_height } },
+      max_extent_y = edge_margin
+    }
   end
 
   local sheets = { NewSheet() }
+  local placements = {}
 
   for i = 1, #order do
     local face = faces[order[i].index]
@@ -300,9 +353,12 @@ function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, ed
       local x, y, rotated, claimed = FindBestPlacement(sheet.free_rects, width, height, clearance_gap, layout_mode)
 
       if x ~= nil then
-        face.sheet_number = sheet_num
-        PlaceFaceAt(face, x, y, rotated)
         ReserveRect(sheet.free_rects, claimed)
+        local placed_height = rotated and width or height
+        if y + placed_height > sheet.max_extent_y then
+          sheet.max_extent_y = y + placed_height
+        end
+        placements[#placements + 1] = { face = face, x = x, y = y, rotated = rotated, sheet_number = sheet_num }
         placed = true
         break
       end
@@ -315,6 +371,7 @@ function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, ed
       -- empty sheet, e.g. when its long edge is wider than the sheet.
       local sheet = NewSheet()
       sheets[#sheets + 1] = sheet
+      local sheet_num = #sheets
 
       local x, y, rotated, claimed = FindBestPlacement(sheet.free_rects, width, height, clearance_gap, layout_mode)
       if x == nil then
@@ -330,17 +387,70 @@ function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, ed
         claimed = { x = edge_margin, y = edge_margin, width = claim_w, height = claim_h }
       end
 
-      face.sheet_number = #sheets
-      PlaceFaceAt(face, x, y, rotated)
       ReserveRect(sheet.free_rects, claimed)
+      local placed_height = rotated and width or height
+      if y + placed_height > sheet.max_extent_y then
+        sheet.max_extent_y = y + placed_height
+      end
+      placements[#placements + 1] = { face = face, x = x, y = y, rotated = rotated, sheet_number = sheet_num }
     end
   end
 
+  local total_extent = 0
+  for i = 1, #sheets do
+    total_extent = total_extent + sheets[i].max_extent_y
+  end
+
+  return { placements = placements, num_sheets = #sheets, total_extent = total_extent }
+end
+
+-- Picks the best of several ArrangeContoursToSheets candidate plans: fewest
+-- sheets first (the real material/cutting cost), then the most compact
+-- (smallest total vertical extent used across those sheets) as a tiebreaker.
+local function PickBestSheetsPlan(candidates)
+  local best = candidates[1]
+  for i = 2, #candidates do
+    local c = candidates[i]
+    if c.num_sheets < best.num_sheets
+       or (c.num_sheets == best.num_sheets and c.total_extent < best.total_extent) then
+      best = c
+    end
+  end
+  return best
+end
+
+function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, edge_margin, layout_mode)
+  if #faces == 0 then
+    return {}, 1
+  end
+
+  local usable_width  = job_width  - 2 * edge_margin
+  local usable_height = job_height - 2 * edge_margin
+  local order = BuildPlacementOrder(faces)
+
+  local plan
+  if layout_mode == "Normal" or layout_mode == "Rotated" then
+    plan = ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  else
+    plan = PickBestSheetsPlan({
+      ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Normal"),
+      ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Rotated"),
+      ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Auto"),
+    })
+  end
+
+  for i = 1, #plan.placements do
+    local p = plan.placements[i]
+    p.face.sheet_number = p.sheet_number
+    PlaceFaceAt(p.face, p.x, p.y, p.rotated)
+  end
+
+  local transformed_faces = {}
   for i = 1, #faces do
     transformed_faces[#transformed_faces + 1] = faces[i]
   end
 
-  return transformed_faces, #sheets
+  return transformed_faces, plan.num_sheets
 end -- ArrangeContoursToSheets
 
 -- RotationMatrix2D's angle argument isn't documented as radians or degrees, and
