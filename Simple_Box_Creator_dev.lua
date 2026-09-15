@@ -535,22 +535,3 @@ function CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesT
 
   return true
 end
-
--- function OnToolPicker_ToolChooseButton(dialog) 
---   local tool = dialog:GetTool("ToolChooseButton")
---   if tool == nil then
--- 		MessageBox("No tool selected!")
--- 		return true
---   end
-  
---   MessageBox("User picked tool ...\n" .. tool_name .. " Diameter = " .. tool.ToolDia)
-  
---   return true
--- end
-
-
---- By putting this function in the script we don't need to create
---- individual functions unless we need specific handling
-function OnLuaButton_XXXX()
-  return true
-end

@@ -149,6 +149,12 @@ body {
     font-size: 15px;
 }
 
+/* ── Invalid field state ──────────────────────────────────────────── */
+.field-row input.invalid {
+    border: 2px solid #cc3333;
+    background-color: #fdeaea;
+}
+
 
 /* ── Checkbox + label row ─────────────────────────────────────────── */
 .checkbox-row {
@@ -440,6 +446,10 @@ body.dark-mode .field-row select {
   background-color: #1a1d24;
   border-color: #383d4a;
   color: #d4d8e8;
+}
+body.dark-mode .field-row input.invalid {
+  border-color: #e05555;
+  background-color: #3a1f22;
 }
 body.dark-mode .checkbox-row {
   color: #b0b8cc;

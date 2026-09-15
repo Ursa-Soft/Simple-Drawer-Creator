@@ -34,19 +34,19 @@
           <div class="sub-panel-title">Box Dimensions</div>
           <div class="field-row" title="Side to side width of the box outside">
             <label for="WidthField">Width</label>
-            <input type="number" step="any" id="WidthField" placeholder="Width of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="WidthField" placeholder="Width of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" title="Front to back depth of the box outside">
             <label for="DepthField">Depth</label>
-            <input type="number" step="any" id="DepthField" placeholder="Depth of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="DepthField" placeholder="Depth of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" title="Top to bottom height of the box outside">
             <label for="HeightField">Height</label>
-            <input type="number" step="any" id="HeightField" placeholder="Height of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="HeightField" placeholder="Height of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" id="showHideDovetailAngle" style="display: none" title="Angle of the dovetail joint, between 45 and 85 degrees">
             <label for="DovetailAngleField">Dovetail Angle</label>
-            <input type="number" step="any" id="DovetailAngleField" placeholder="Dovetail Angle" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="DovetailAngleField" placeholder="Dovetail Angle" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
         </div>
       </div>
@@ -61,16 +61,16 @@
           </div>
           <div class="field-row" title="Width of the fingers">
             <label for="SideTabWidthField" id="SideJointLabel">Side joints</label>
-            <input type="number" id="SideTabWidthField" placeholder="Width of Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" id="SideTabWidthField" placeholder="Width of Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div id="showHideTopBottomJoints" style="display: none">
             <div class="field-row" id="showHideLidJointWidth" title="Width of the lid fingers">
               <label for="TopTabWidthField">Lid joints</label>
-              <input type="number" id="TopTabWidthField" placeholder="Width of Lid Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+              <input type="number" id="TopTabWidthField" placeholder="Width of Lid Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
             </div>
             <div class="field-row" id="showHideBottomJointWidth" title="Width of the bottom fingers">
               <label for="BottomTabWidthField">Bottom joints</label>
-              <input type="number" id="BottomTabWidthField" placeholder="Width of Bottom Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+              <input type="number" id="BottomTabWidthField" placeholder="Width of Bottom Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
             </div>
           </div>
         </div>
@@ -82,7 +82,7 @@
           <div class="sub-panel-title">Machining &amp; Layout</div>
           <div class="field-row" title="Additional material removed in joints for better fitment, can be maximum of 1/2 the bit diameter.">
             <label for="AllowanceField">Allowance</label>
-            <input type="number" id="AllowanceField" placeholder="Allowance" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" id="AllowanceField" placeholder="Allowance" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" title="Spacing between parts when laying out on the material, should be at least twice bit diameter, if less than that will use twice bit diameter instead">
             <label for="PartSpacingField">Part Spacing</label>
@@ -258,9 +258,17 @@
   </div>
 
   <!-- Hidden legacy fieldset (read by Lua) -->
-  <fieldset id="theoneiwant" style="display:none;">
-    <label>Here it is!</label>
+  <fieldset id="HiddenFields" style="display:none;">
+    <input type="checkbox" id="DimensionsChanged" value="" class="LuaButton"/>
+    <input type="checkbox" id="InvalidWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidWidth')"/>
+    <input type="checkbox" id="InvalidDepth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidDepth')"/>
+    <input type="checkbox" id="InvalidHeight" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidHeight')"/>
+    <input type="checkbox" id="InvalidDovetailAngle" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidDovetailAngle')"/>
+    <input type="checkbox" id="InvalidSideJointWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidSideJointWidth')"/>
+    <input type="checkbox" id="InvalidLidJointWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidLidJointWidth')"/>
+    <input type="checkbox" id="InvalidBottomJointWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidBottomJointWidth')"/>
   </fieldset>
+
 
 </div><!-- /page-wrapper -->
 
@@ -334,6 +342,56 @@
     if (bottomCheckItem) { bottomCheckItem.style.display = (selectedIndex === 3) ? "none" : "block"; }
   }
 
+  // Width/Depth/Height/joint widths/dovetail angle/allowance are plain number
+  // fields with no LuaButton class, so edits don't reach Lua on their own.
+  // Clicking the hidden DimensionsChanged checkbox both flips its value and
+  // fires the LuaButton click that notifies Lua.
+  function onGeometryFieldChanged() {
+    var dimensionsChanged = document.getElementById("DimensionsChanged");
+    if (dimensionsChanged) { dimensionsChanged.click(); }
+  }
+
+  // Maps each hidden "InvalidXxx" checkbox (set by Lua) to the field it should
+  // mark invalid (red outline). Add an entry here whenever another field needs
+  // this same invalid-flag wiring - no new callback required.
+  var g_invalidFieldMap = {
+    "InvalidWidth":            "WidthField",
+    "InvalidDepth":            "DepthField",
+    "InvalidHeight":           "HeightField",
+    "InvalidDovetailAngle":    "DovetailAngleField",
+    "InvalidSideJointWidth":   "SideTabWidthField",
+    "InvalidLidJointWidth":    "TopTabWidthField",
+    "InvalidBottomJointWidth": "BottomTabWidthField"
+  };
+
+  // Marks/unmarks the field paired with checkboxId based on that checkbox's checked state.
+  function updateInvalidFieldFlag(checkboxId) {
+    var fieldId = g_invalidFieldMap[checkboxId];
+    var field = fieldId && document.getElementById(fieldId);
+    if (!field) { return; }
+
+    var invalid = document.getElementById(checkboxId);
+    var isInvalid = invalid && invalid.checked;
+    var className = field.className.replace(" invalid", "").replace("invalid", "");
+    field.className = isInvalid ? (className + " invalid") : className;
+  }
+
+  // Lua sets these hidden checkboxes' checked state directly through the dialog
+  // bridge, which doesn't fire onclick/onchange (programmatic changes never do).
+  // IE7 has no MutationObserver either, so poll for the flags instead.
+  var g_lastInvalidState = {};
+  function pollInvalidFieldFlags() {
+    for (var checkboxId in g_invalidFieldMap) {
+      var invalid = document.getElementById(checkboxId);
+      var isInvalid = !!(invalid && invalid.checked);
+      if (isInvalid !== g_lastInvalidState[checkboxId]) {
+        g_lastInvalidState[checkboxId] = isInvalid;
+        updateInvalidFieldFlag(checkboxId);
+      }
+    }
+  }
+  setInterval(pollInvalidFieldFlags, 300);
+
   // Shows or hides the Bottom and Lid joint width fields.
   function onShowAllWidthsChanged(checkbox) {
     var el = document.getElementById("showHideTopBottomJoints");
@@ -399,6 +457,8 @@
 
     var allWidths = document.getElementById("AllJointWidths");
     if (allWidths) { onShowAllWidthsChanged(allWidths); }
+
+    for (var invalidCheckboxId in g_invalidFieldMap) { updateInvalidFieldFlag(invalidCheckboxId); }
 
     onJointTypeChanged();
   }, 100);
