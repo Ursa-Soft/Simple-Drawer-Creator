@@ -258,15 +258,18 @@
   </div>
 
   <!-- Hidden legacy fieldset (read by Lua) -->
+  <!-- these are used to pass error messages from Lua to the HTML, -->
+  <!-- which then marks the field invalid and shows the message as a tooltip -->
   <fieldset id="HiddenFields" style="display:none;">
     <input type="checkbox" id="DimensionsChanged" value="" class="LuaButton"/>
-    <input type="checkbox" id="InvalidWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidWidth')"/>
-    <input type="checkbox" id="InvalidDepth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidDepth')"/>
-    <input type="checkbox" id="InvalidHeight" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidHeight')"/>
-    <input type="checkbox" id="InvalidDovetailAngle" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidDovetailAngle')"/>
-    <input type="checkbox" id="InvalidSideJointWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidSideJointWidth')"/>
-    <input type="checkbox" id="InvalidLidJointWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidLidJointWidth')"/>
-    <input type="checkbox" id="InvalidBottomJointWidth" value="" class="LuaButton" onclick="updateInvalidFieldFlag('InvalidBottomJointWidth')"/>
+    <input type="text" id="InvalidWidth" value=""/>
+    <input type="text" id="InvalidDepth" value=""/>
+    <input type="text" id="InvalidHeight" value=""/>
+    <input type="text" id="InvalidDovetailAngle" value=""/>
+    <input type="text" id="InvalidAllowance" value=""/>
+    <input type="text" id="InvalidSideJointWidth" value=""/>
+    <input type="text" id="InvalidLidJointWidth" value=""/>
+    <input type="text" id="InvalidBottomJointWidth" value=""/>
   </fieldset>
 
 
@@ -351,53 +354,103 @@
     if (dimensionsChanged) { dimensionsChanged.click(); }
   }
 
-  // Maps each hidden "InvalidXxx" checkbox (set by Lua) to the field it should
-  // mark invalid (red outline). Add an entry here whenever another field needs
-  // this same invalid-flag wiring - no new callback required.
+  // Maps each hidden "InvalidXxx" text field (set by Lua to an error message,
+  // or "" when valid) to the field it should mark invalid (red outline) and
+  // give that message as a tooltip. Add an entry here whenever another field
+  // needs this same invalid-message wiring - no new callback required.
   var g_invalidFieldMap = {
     "InvalidWidth":            "WidthField",
     "InvalidDepth":            "DepthField",
     "InvalidHeight":           "HeightField",
     "InvalidDovetailAngle":    "DovetailAngleField",
+    "InvalidAllowance":        "AllowanceField",
     "InvalidSideJointWidth":   "SideTabWidthField",
     "InvalidLidJointWidth":    "TopTabWidthField",
     "InvalidBottomJointWidth": "BottomTabWidthField"
   };
 
-  // Marks/unmarks the field paired with checkboxId based on that checkbox's checked state.
-  function updateInvalidFieldFlag(checkboxId) {
-    var fieldId = g_invalidFieldMap[checkboxId];
-    var field = fieldId && document.getElementById(fieldId);
-    if (!field) { return; }
+  // Each field's own tooltip before any invalid-message override, so it can
+  // be restored once the field becomes valid again. None of these fields
+  // carry their own title normally (the descriptive tooltip lives on the
+  // surrounding .field-row), but this is captured rather than assumed so a
+  // field that ever gains one keeps it.
+  var g_originalTitles = {};
 
-    var invalid = document.getElementById(checkboxId);
-    var isInvalid = invalid && invalid.checked;
+  // Marks/unmarks the field paired with messageFieldId based on that hidden
+  // field's current text: empty means valid, anything else is the error
+  // message to show as the field's own tooltip.
+  function updateInvalidFieldFlag(messageFieldId) {
+    var fieldId = g_invalidFieldMap[messageFieldId];
+    var field = fieldId && document.getElementById(fieldId);
+    var messageField = document.getElementById(messageFieldId);
+    if (!field || !messageField) { return; }
+
+    if (!(fieldId in g_originalTitles)) {
+      g_originalTitles[fieldId] = field.getAttribute("title");
+    }
+
+    var message = messageField.value;
     var className = field.className.replace(" invalid", "").replace("invalid", "");
-    field.className = isInvalid ? (className + " invalid") : className;
+
+    if (message) {
+      field.className = className + " invalid";
+      field.title = message;
+    } else {
+      field.className = className;
+      var originalTitle = g_originalTitles[fieldId];
+      if (originalTitle === null) {
+        field.removeAttribute("title");
+      } else {
+        field.title = originalTitle;
+      }
+    }
   }
 
-  // Lua sets these hidden checkboxes' checked state directly through the dialog
-  // bridge, which doesn't fire onclick/onchange (programmatic changes never do).
-  // IE7 has no MutationObserver either, so poll for the flags instead.
-  var g_lastInvalidState = {};
+  // Lua writes an error message (or "") into these hidden text fields
+  // directly through the dialog bridge, which doesn't fire onchange
+  // (programmatic changes never do). IE7 has no MutationObserver either, so
+  // poll for the messages instead.
+  var g_lastInvalidMessage = {};
   function pollInvalidFieldFlags() {
-    for (var checkboxId in g_invalidFieldMap) {
-      var invalid = document.getElementById(checkboxId);
-      var isInvalid = !!(invalid && invalid.checked);
-      if (isInvalid !== g_lastInvalidState[checkboxId]) {
-        g_lastInvalidState[checkboxId] = isInvalid;
-        updateInvalidFieldFlag(checkboxId);
+    for (var messageFieldId in g_invalidFieldMap) {
+      var messageField = document.getElementById(messageFieldId);
+      var message = messageField ? messageField.value : "";
+      if (message !== g_lastInvalidMessage[messageFieldId]) {
+        g_lastInvalidMessage[messageFieldId] = message;
+        updateInvalidFieldFlag(messageFieldId);
       }
     }
   }
   setInterval(pollInvalidFieldFlags, 300);
 
-  // Shows or hides the Bottom and Lid joint width fields.
+  // ToolNameField is a <span> that Lua's tool picker updates directly when
+  // the user picks a tool - not a form field, so there's no onchange to hook,
+  // and (same reasoning as above) no event fires from that programmatic
+  // update either. Poll its text instead: the tool's diameter feeds into the
+  // joint-width/dovetail tool-fit checks, so picking a new tool should also
+  // trip DimensionsChanged and re-run validation.
+  var g_lastToolName = null;
+  function pollToolNameChanged() {
+    var toolNameField = document.getElementById("ToolNameField");
+    if (!toolNameField) { return; }
+    var currentName = toolNameField.innerHTML;
+    if (currentName !== g_lastToolName) {
+      g_lastToolName = currentName;
+      onGeometryFieldChanged();
+    }
+  }
+  setInterval(pollToolNameChanged, 300);
+
+  // Shows or hides the Bottom and Lid joint width fields. Whether Bottom/Lid
+  // share the Side field or get their own changes which fields validation
+  // even looks at (see ValidateJointWidths in DisplayDialog.xlua), so this
+  // also re-runs validation the same way editing a geometry field does.
   function onShowAllWidthsChanged(checkbox) {
     var el = document.getElementById("showHideTopBottomJoints");
     if (el) { el.style.display = checkbox.checked ? "block" : "none"; }
 	  var elSideJoint = document.getElementById("SideJointLabel")
 	  if (elSideJoint) {elSideJoint.innerHTML=checkbox.checked?"Side Joints":"All Joints"}
+    onGeometryFieldChanged();
   }
 
   // Dogbones only apply to box (finger) joints, not dovetail joints.
@@ -458,7 +511,7 @@
     var allWidths = document.getElementById("AllJointWidths");
     if (allWidths) { onShowAllWidthsChanged(allWidths); }
 
-    for (var invalidCheckboxId in g_invalidFieldMap) { updateInvalidFieldFlag(invalidCheckboxId); }
+    for (var invalidFieldId in g_invalidFieldMap) { updateInvalidFieldFlag(invalidFieldId); }
 
     onJointTypeChanged();
   }, 100);

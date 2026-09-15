@@ -21,32 +21,35 @@ local G_dialogOptions
 -- dimension and pops a DisplayMessageBox describing it - the original inline
 -- behavior this was extracted from.
 -- report_as_dialog = false (the live DimensionsChanged callback): checks all
--- three and instead silently flags each bad one by toggling its own Invalid
--- checkbox in the dialog, so the HTML side can mark that field red.
+-- three and instead silently writes the problem (or "" when valid) into each
+-- one's own Invalid text field, so the HTML side can mark that field red and
+-- show the message as its tooltip.
 --
 -- Returns true if width, depth and height are all valid.
 local function ValidateBoxDimensions(dialog, options, report_as_dialog)
   local double_thickness = options.thickness * 2
   local dims = {
-    { value = options.width,  label = "width",  invalid_checkbox = "InvalidWidth" },
-    { value = options.depth,  label = "depth",  invalid_checkbox = "InvalidDepth" },
-    { value = options.height, label = "height", invalid_checkbox = "InvalidHeight" },
+    { value = options.width,  label = "width",  invalid_field = "InvalidWidth" },
+    { value = options.depth,  label = "depth",  invalid_field = "InvalidDepth" },
+    { value = options.height, label = "height", invalid_field = "InvalidHeight" },
   }
 
   local all_ok = true
   for _, dim in ipairs(dims) do
     local is_invalid = dim.value <= double_thickness
+    local message = ""
     if is_invalid then
       all_ok = false
+      message = string.format("The box %s %." .. G_decimalPlaces .. "f is too small for material thickness %." .. G_decimalPlaces .. "f.", dim.label, dim.value, options.thickness)
     end
 
     if report_as_dialog then
       if is_invalid then
-        DisplayMessageBox(string.format("The box %s %." .. G_decimalPlaces .. "f is too small for material thickness %." .. G_decimalPlaces .. "f.", dim.label, dim.value, options.thickness))
+        DisplayMessageBox(message)
         return false
       end
     else
-      dialog:UpdateCheckBox(dim.invalid_checkbox, is_invalid)
+      dialog:UpdateTextField(dim.invalid_field, message)
     end
   end
 
@@ -326,46 +329,54 @@ end
 --
 -- report_as_dialog = true: pops a DisplayMessageBox and returns false when
 -- invalid - the original inline behavior this was extracted from.
--- report_as_dialog = false: silently flags InvalidDovetailAngle instead.
+-- report_as_dialog = false: silently writes the problem (or "" when valid)
+-- into InvalidDovetailAngle instead.
 local function ValidateDovetailAngle(dialog, options, report_as_dialog)
   if not options.dovetailJoint then
     if not report_as_dialog then
-      dialog:UpdateCheckBox("InvalidDovetailAngle", false)
+      dialog:UpdateTextField("InvalidDovetailAngle", "")
     end
     return true
   end
 
   local is_invalid = not IsNonNeg(options.dovetailAngleDegrees) or options.dovetailAngleDegrees < 45 or options.dovetailAngleDegrees > 85
+  local message = is_invalid and "Dovetail angle must be between 45 and 85 degrees." or ""
 
   if report_as_dialog then
     if is_invalid then
-      DisplayMessageBox("Dovetail angle must be between 45 and 85 degrees.")
+      DisplayMessageBox(message)
       return false
     end
     return true
   end
 
-  dialog:UpdateCheckBox("InvalidDovetailAngle", is_invalid)
+  dialog:UpdateTextField("InvalidDovetailAngle", message)
   return not is_invalid
 end
 
 -- Validates the Side/Bottom/Lid joint widths: first that they geometrically
--- fit within the box's own inner dimensions, then - if a valid tool and
--- allowance are available - that the cutting tool actually fits in the
--- resulting gap, for whichever joint type (finger/box vs dovetail) is
--- currently selected. Relies on SuggestSmallerJointWidth, SuggestWorkingJointWidth,
--- and BuildDovetailFitSuggestion, which DisplayDialog() (re)defines as globals
+-- fit within the box's own inner dimensions, then - if the allowance leaves
+-- a usable effective tool diameter - that the cutting tool actually fits in
+-- the resulting gap, for whichever joint type (finger/box vs dovetail) is
+-- currently selected. Also validates the allowance itself (InvalidAllowance)
+-- as a side effect, since it's this same effective-diameter computation that
+-- decides whether it's too large for the tool. Relies on
+-- SuggestSmallerJointWidth, SuggestWorkingJointWidth, and
+-- BuildDovetailFitSuggestion, which DisplayDialog() (re)defines as globals
 -- each time the dialog opens - see the comment there.
 --
 -- report_as_dialog = true (OK/Validate flow): stops at the first problem and
 -- pops the matching DisplayMessageBox with a suggested fix - the original
 -- inline behavior this was extracted from, unchanged.
 -- report_as_dialog = false (live DimensionsChanged callback): checks
--- everything and instead flags whichever field is actually responsible. When
--- "use all joint widths" is off, Bottom and Lid share the single visible
--- Side/All joint width field (see ReadOptionsFromDialog), so a failure in
--- either of them is reported against InvalidSideJointWidth instead -
--- flagging their own checkboxes would mark a hidden field.
+-- everything and instead writes the problem (or "" when valid) into whichever
+-- field's Invalid text field is actually responsible - only the FIRST problem
+-- found for a given joint is kept, matching the OK/Validate flow, which also
+-- only ever reports the first one. When "use all joint widths" is off,
+-- Bottom and Lid share the single visible Side/All joint width field (see
+-- ReadOptionsFromDialog), so a failure in either of them is reported against
+-- InvalidSideJointWidth instead - flagging their own fields would mark a
+-- hidden field.
 --
 -- Returns true if every joint currently being cut is valid.
 local function ValidateJointWidths(dialog, options, sideDoveTail, bottomDoveTail, lidDoveTail, report_as_dialog)
@@ -392,64 +403,77 @@ local function ValidateJointWidths(dialog, options, sideDoveTail, bottomDoveTail
   local num_flaps_h = math.floor((0.5*inner_height) / sideDoveTail.min_width)
   local total_tab_space_h = (inner_height - num_flaps_h*sideDoveTail.min_width)
 
-  local bottom_invalid, lid_invalid, side_invalid = false, false, false
+  local bottom_message, lid_message, side_message = "", "", ""
+
+  -- Handles one problem found for a joint: in report_as_dialog mode, pops
+  -- the message box and returns true (meaning "stop now, return false") -
+  -- the original behavior. Otherwise returns the message to keep for that
+  -- joint (the earlier of current_message/new_message, so only the first
+  -- problem found survives) and false (meaning "keep going").
+  local function report(current_message, new_message)
+    if report_as_dialog then
+      DisplayMessageBox(new_message)
+      return current_message, true
+    end
+    if current_message == "" then
+      return new_message, false
+    end
+    return current_message, false
+  end
 
   if cuttingBottomJoint then
     if (num_flaps_w_bottom < 1) or (total_tab_space_w_bottom < 0) then
-      if report_as_dialog then
-        local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
-        local suggestion_text = string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", suggested)
-        if (not options.useAllJointWidths) then
-          DisplayMessageBox(string.format("The joint width %." .. G_decimalPlaces .. "f is too big given boxes bottom given the inner width is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_width, suggestion_text))
-        else
-          DisplayMessageBox(string.format("The bottom joint width %." .. G_decimalPlaces .. "f is too big given box inner width is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_width, suggestion_text))
-        end
-        return false
+      local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
+      local suggestion_text = string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", suggested)
+      local message
+      if (not options.useAllJointWidths) then
+        message = string.format("The joint width %." .. G_decimalPlaces .. "f is too big given boxes bottom given the inner width is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_width, suggestion_text)
+      else
+        message = string.format("The bottom joint width %." .. G_decimalPlaces .. "f is too big given box inner width is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_width, suggestion_text)
       end
-      bottom_invalid = true
+      local aborted
+      bottom_message, aborted = report(bottom_message, message)
+      if aborted then return false end
     end
 
     if (num_flaps_d_bottom < 1) or (total_tab_space_d_bottom < 0) then
-      if report_as_dialog then
-        local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
-        local suggestion_text = string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", suggested)
-        if (not options.useAllJointWidths) then
-          DisplayMessageBox(string.format("The joint width %." .. G_decimalPlaces .. "f is too big given boxes bottom given the inner depth is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_depth, suggestion_text))
-        else
-          DisplayMessageBox(string.format("The bottom joint width %." .. G_decimalPlaces .. "f is too big given box inner depth is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_depth, suggestion_text))
-        end
-        return false
+      local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
+      local suggestion_text = string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", suggested)
+      local message
+      if (not options.useAllJointWidths) then
+        message = string.format("The joint width %." .. G_decimalPlaces .. "f is too big given boxes bottom given the inner depth is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_depth, suggestion_text)
+      else
+        message = string.format("The bottom joint width %." .. G_decimalPlaces .. "f is too big given box inner depth is %." .. G_decimalPlaces .. "f.%s", bottomDoveTail.min_width, inner_depth, suggestion_text)
       end
-      bottom_invalid = true
+      local aborted
+      bottom_message, aborted = report(bottom_message, message)
+      if aborted then return false end
     end
   end
 
   if cuttingLidJoint then
     if (num_flaps_w_lid < 1) or (total_tab_space_w_lid < 0) then
-      if report_as_dialog then
-        local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
-        DisplayMessageBox(string.format("The lid joint width %." .. G_decimalPlaces .. "f is too big given box inner width is %." .. G_decimalPlaces .. "f. Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", lidDoveTail.min_width, inner_width, suggested))
-        return false
-      end
-      lid_invalid = true
+      local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
+      local message = string.format("The lid joint width %." .. G_decimalPlaces .. "f is too big given box inner width is %." .. G_decimalPlaces .. "f. Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", lidDoveTail.min_width, inner_width, suggested)
+      local aborted
+      lid_message, aborted = report(lid_message, message)
+      if aborted then return false end
     end
     if (num_flaps_d_lid < 1) or (total_tab_space_d_lid < 0) then
-      if report_as_dialog then
-        local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
-        DisplayMessageBox(string.format("The lid joint width %." .. G_decimalPlaces .. "f is too big given box inner depth is %." .. G_decimalPlaces .. "f. Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", lidDoveTail.min_width, inner_depth, suggested))
-        return false
-      end
-      lid_invalid = true
+      local suggested = SuggestSmallerJointWidth({inner_width, inner_depth})
+      local message = string.format("The lid joint width %." .. G_decimalPlaces .. "f is too big given box inner depth is %." .. G_decimalPlaces .. "f. Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", lidDoveTail.min_width, inner_depth, suggested)
+      local aborted
+      lid_message, aborted = report(lid_message, message)
+      if aborted then return false end
     end
   end
 
   if (num_flaps_h < 1) or (total_tab_space_h < 0) then
-    if report_as_dialog then
-      local suggested = SuggestSmallerJointWidth({inner_height})
-      DisplayMessageBox(string.format("The side joint width %." .. G_decimalPlaces .. "f is too big given box inner height is %." .. G_decimalPlaces .. "f. Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", sideDoveTail.min_width, inner_height, suggested))
-      return false
-    end
-    side_invalid = true
+    local suggested = SuggestSmallerJointWidth({inner_height})
+    local message = string.format("The side joint width %." .. G_decimalPlaces .. "f is too big given box inner height is %." .. G_decimalPlaces .. "f. Try a joint width of %." .. G_decimalPlaces .. "f or smaller.", sideDoveTail.min_width, inner_height, suggested)
+    local aborted
+    side_message, aborted = report(side_message, message)
+    if aborted then return false end
   end
 
   -- Check if tool will fit
@@ -465,11 +489,17 @@ local function ValidateJointWidths(dialog, options, sideDoveTail, bottomDoveTail
   end
 
   local can_check_tool_fit = effectiveDia > 0
+  local allowance_message = ""
   if not can_check_tool_fit then
+    allowance_message = string.format("The allowance is too large given the tool diameter.\n\nThe allowance must be less than half the tool diameter (%." .. G_decimalPlaces .. "f).", converted_tool_diameter / 2)
     if report_as_dialog then
-      DisplayMessageBox("The allowance is too large given the tool diameter.\n\nThe allowance must be less than half the tool diameter.")
+      DisplayMessageBox(allowance_message)
       return false
     end
+  end
+
+  if not report_as_dialog then
+    dialog:UpdateTextField("InvalidAllowance", allowance_message)
   end
 
   if can_check_tool_fit then
@@ -490,32 +520,29 @@ local function ValidateJointWidths(dialog, options, sideDoveTail, bottomDoveTail
       local required_lid_space = top_min_space + effectiveDia + toolpath_safety_clearance
 
       if (tab_space_h <= required_side_space) then
-        if report_as_dialog then
-          local suggestion_text = BuildDovetailFitSuggestion(options, sideDoveTail.min_width, {inner_height}, effectiveDia, toolpath_safety_clearance, required_side_space)
-          DisplayMessageBox("The selected tool will not fit between the side joints." .. suggestion_text)
-          return false
-        end
-        side_invalid = true
+        local suggestion_text = BuildDovetailFitSuggestion(options, sideDoveTail.min_width, {inner_height}, effectiveDia, toolpath_safety_clearance, required_side_space)
+        local message = "The selected tool will not fit between the side joints." .. suggestion_text
+        local aborted
+        side_message, aborted = report(side_message, message)
+        if aborted then return false end
       end
       if cuttingBottomJoint and
          ((tab_space_w_bottom <= required_bottom_space) or
           (tab_space_d_bottom <= required_bottom_space)) then
-        if report_as_dialog then
-          local suggestion_text = BuildDovetailFitSuggestion(options, bottomDoveTail.min_width, {inner_width, inner_depth}, effectiveDia, toolpath_safety_clearance, required_bottom_space)
-          DisplayMessageBox("The selected tool will not fit between the bottom joints." .. suggestion_text)
-          return false
-        end
-        bottom_invalid = true
+        local suggestion_text = BuildDovetailFitSuggestion(options, bottomDoveTail.min_width, {inner_width, inner_depth}, effectiveDia, toolpath_safety_clearance, required_bottom_space)
+        local message = "The selected tool will not fit between the bottom joints." .. suggestion_text
+        local aborted
+        bottom_message, aborted = report(bottom_message, message)
+        if aborted then return false end
       end
       if cuttingLidJoint and
          ((tab_space_w_lid <= required_lid_space) or
           (tab_space_d_lid <= required_lid_space)) then
-        if report_as_dialog then
-          local suggestion_text = BuildDovetailFitSuggestion(options, lidDoveTail.min_width, {inner_width, inner_depth}, effectiveDia, toolpath_safety_clearance, required_lid_space)
-          DisplayMessageBox("The selected tool will not fit between the lid joints." .. suggestion_text)
-          return false
-        end
-        lid_invalid = true
+        local suggestion_text = BuildDovetailFitSuggestion(options, lidDoveTail.min_width, {inner_width, inner_depth}, effectiveDia, toolpath_safety_clearance, required_lid_space)
+        local message = "The selected tool will not fit between the lid joints." .. suggestion_text
+        local aborted
+        lid_message, aborted = report(lid_message, message)
+        if aborted then return false end
       end
     else
       tab_space_w_bottom = math.min(tab_space_w_bottom, bottomDoveTail.min_width)
@@ -525,32 +552,29 @@ local function ValidateJointWidths(dialog, options, sideDoveTail, bottomDoveTail
       tab_space_h = math.min(tab_space_h, sideDoveTail.min_width)
 
       if cuttingBottomJoint and ((tab_space_w_bottom <= effectiveDia) or (tab_space_d_bottom <= effectiveDia)) then
-        if report_as_dialog then
-          local suggested, direction = SuggestWorkingJointWidth(options, bottomDoveTail.min_width, {inner_width, inner_depth}, effectiveDia)
-          local suggestion_text = suggested and string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or %s.", suggested, direction) or ""
-          DisplayMessageBox("The selected tool will not fit between the bottom joints." .. suggestion_text)
-          return false
-        end
-        bottom_invalid = true
+        local suggested, direction = SuggestWorkingJointWidth(options, bottomDoveTail.min_width, {inner_width, inner_depth}, effectiveDia)
+        local suggestion_text = suggested and string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or %s.", suggested, direction) or ""
+        local message = "The selected tool will not fit between the bottom joints." .. suggestion_text
+        local aborted
+        bottom_message, aborted = report(bottom_message, message)
+        if aborted then return false end
       end
       if (tab_space_h <= effectiveDia) then
-        if report_as_dialog then
-          local suggested, direction = SuggestWorkingJointWidth(options, sideDoveTail.min_width, {inner_height}, effectiveDia)
-          local suggestion_text = suggested and string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or %s.", suggested, direction) or ""
-          DisplayMessageBox("The selected tool will not fit between the side joints." .. suggestion_text)
-          return false
-        end
-        side_invalid = true
+        local suggested, direction = SuggestWorkingJointWidth(options, sideDoveTail.min_width, {inner_height}, effectiveDia)
+        local suggestion_text = suggested and string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or %s.", suggested, direction) or ""
+        local message = "The selected tool will not fit between the side joints." .. suggestion_text
+        local aborted
+        side_message, aborted = report(side_message, message)
+        if aborted then return false end
       end
       if options.useAllJointWidths and cuttingLidJoint then
         if (tab_space_w_lid <= effectiveDia) or (tab_space_d_lid <= effectiveDia) then
-          if report_as_dialog then
-            local suggested, direction = SuggestWorkingJointWidth(options, lidDoveTail.min_width, {inner_width, inner_depth}, effectiveDia)
-            local suggestion_text = suggested and string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or %s.", suggested, direction) or ""
-            DisplayMessageBox("The selected tool will not fit between the lid joints." .. suggestion_text)
-            return false
-          end
-          lid_invalid = true
+          local suggested, direction = SuggestWorkingJointWidth(options, lidDoveTail.min_width, {inner_width, inner_depth}, effectiveDia)
+          local suggestion_text = suggested and string.format(" Try a joint width of %." .. G_decimalPlaces .. "f or %s.", suggested, direction) or ""
+          local message = "The selected tool will not fit between the lid joints." .. suggestion_text
+          local aborted
+          lid_message, aborted = report(lid_message, message)
+          if aborted then return false end
         end
       end
     end
@@ -562,22 +586,24 @@ local function ValidateJointWidths(dialog, options, sideDoveTail, bottomDoveTail
 
   -- When "use all joint widths" is off, Bottom and Lid share the single
   -- visible Side/All joint width field (see ReadOptionsFromDialog), so fold
-  -- their failures into InvalidSideJointWidth instead of their own (hidden)
-  -- checkboxes.
-  local side_checkbox_invalid = side_invalid
-  local bottom_checkbox_invalid = bottom_invalid
-  local lid_checkbox_invalid = lid_invalid
+  -- their messages into InvalidSideJointWidth instead of their own (hidden)
+  -- fields.
+  local side_field_message = side_message
+  local bottom_field_message = bottom_message
+  local lid_field_message = lid_message
   if not options.useAllJointWidths then
-    side_checkbox_invalid = side_invalid or bottom_invalid or lid_invalid
-    bottom_checkbox_invalid = false
-    lid_checkbox_invalid = false
+    side_field_message = side_message
+    if side_field_message == "" then side_field_message = bottom_message end
+    if side_field_message == "" then side_field_message = lid_message end
+    bottom_field_message = ""
+    lid_field_message = ""
   end
 
-  dialog:UpdateCheckBox("InvalidSideJointWidth", side_checkbox_invalid)
-  dialog:UpdateCheckBox("InvalidBottomJointWidth", bottom_checkbox_invalid)
-  dialog:UpdateCheckBox("InvalidLidJointWidth", lid_checkbox_invalid)
+  dialog:UpdateTextField("InvalidSideJointWidth", side_field_message)
+  dialog:UpdateTextField("InvalidBottomJointWidth", bottom_field_message)
+  dialog:UpdateTextField("InvalidLidJointWidth", lid_field_message)
 
-  return not (bottom_invalid or lid_invalid or side_invalid)
+  return bottom_message == "" and lid_message == "" and side_message == "" and allowance_message == ""
 end
 
 -- Gremlin added bottomDoveTail seperation from side which is just sideDoveTail
@@ -625,13 +651,14 @@ function DisplayDialog(script_path, options, sideDoveTail, bottomDoveTail, lidDo
   -- or for us to set things in the dialog that lua doesn't
   -- otherwise allow
   dialog:AddCheckBox("DimensionsChanged", false)
-  dialog:AddCheckBox("InvalidWidth", false)
-  dialog:AddCheckBox("InvalidDepth", false)
-  dialog:AddCheckBox("InvalidHeight", false)
-  dialog:AddCheckBox("InvalidSideJointWidth", false)
-  dialog:AddCheckBox("InvalidLidJointWidth", false)
-  dialog:AddCheckBox("InvalidBottomJointWidth", false)
-  dialog:AddCheckBox("InvalidDovetailAngle", false)
+  dialog:AddTextField("InvalidWidth", "")
+  dialog:AddTextField("InvalidDepth", "")
+  dialog:AddTextField("InvalidHeight", "")
+  dialog:AddTextField("InvalidSideJointWidth", "")
+  dialog:AddTextField("InvalidLidJointWidth", "")
+  dialog:AddTextField("InvalidBottomJointWidth", "")
+  dialog:AddTextField("InvalidDovetailAngle", "")
+  dialog:AddTextField("InvalidAllowance", "")
 
   -- Add Tool picker
   -- Add toolpath name field
