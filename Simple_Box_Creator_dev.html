@@ -305,6 +305,9 @@
     }
   }
 
+  // Lid type changes which faces validation even looks at (cuttingLidJoint
+  // in ValidateJointWidths only applies when the lid uses finger joints), so
+  // this also re-runs validation the same way editing a geometry field does.
   function onLidTypeChanged(el) {
     var select = document.getElementById("LidTypeSelect");
     var selectedIndex = select ? select.selectedIndex : 0;
@@ -323,8 +326,11 @@
 
     var lidCheckItem = document.getElementById("MakeLidCheckItem");
     if (lidCheckItem) { lidCheckItem.style.display = (selectedIndex === 3) ? "none" : "block"; }
+
+    onGeometryFieldChanged();
   }
 
+  // Same reasoning as onLidTypeChanged, for the bottom.
   function onBottomTypeChanged(el) {
     var select = document.getElementById("BottomTypeSelect");
     var selectedIndex = select ? select.selectedIndex : 0;
@@ -343,6 +349,8 @@
 
     var bottomCheckItem = document.getElementById("MakeBottomCheckItem");
     if (bottomCheckItem) { bottomCheckItem.style.display = (selectedIndex === 3) ? "none" : "block"; }
+
+    onGeometryFieldChanged();
   }
 
   // Width/Depth/Height/joint widths/dovetail angle/allowance are plain number
@@ -454,7 +462,10 @@
   }
 
   // Dogbones only apply to box (finger) joints, not dovetail joints.
-  // The dovetail angle is the reverse: only shown for dovetail joints.
+  // The dovetail angle is the reverse: only shown for dovetail joints - and
+  // ValidateDovetailAngle/ValidateJointWidths in DisplayDialog.xlua both
+  // branch on box vs dovetail, so this also re-runs validation the same way
+  // editing a geometry field does.
   function onJointTypeChanged() {
     var boxRadio = document.getElementById("TabTypeRadio1");
     var isBoxJoint = boxRadio && boxRadio.checked;
@@ -466,6 +477,7 @@
     if (dovetailAngleRow) { dovetailAngleRow.style.display = isBoxJoint ? "none" : "block"; }
 
     updateRoundoverToolVisibility();
+    onGeometryFieldChanged();
   }
 
   // The finger roundover tool only applies to box (finger) joints that are not using dogbones.
