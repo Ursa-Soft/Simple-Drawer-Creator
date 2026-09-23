@@ -1,154 +1,457 @@
 -- VECTRIC LUA SCRIPT
 -- SheetArrangement.xlua
 --
--- Shelf-packing layout of faces onto one or more material sheets, plus the
--- sheet-manager glue (finding/creating/activating a "Sheet N" in the job).
+-- Maximal-rectangles packing of faces onto one or more material sheets,
+-- plus the sheet-manager glue (finding/creating/activating a "Sheet N" in
+-- the job).
+--
+-- Rather than packing into fixed-height rows (a "shelf" packer - which is
+-- what this file used to do), this tracks the actual free rectangular
+-- regions remaining on each sheet directly, and places each piece into
+-- whichever free region wastes the least of it. That lets a later, smaller
+-- piece backfill leftover space anywhere it exists on the sheet, not just
+-- at the end of whatever row it would have landed in - which in turn is
+-- what tends to consolidate whatever's left over into one large usable
+-- remnant, rather than scattering it as a thin strip at the end of every
+-- row. (There is no longer a "shelf" concept at all in this file - only
+-- sheets and the free rectangles on them.)
+
+--[[  -------------- MaxRects packing core --------------------------------------------------
+|
+|  A sheet is represented purely as its list of free rectangles - regions
+|  of the usable area not yet claimed by a placed piece - starting as a
+|  single rectangle covering the whole usable area.
+|
+|  To place a piece:
+|    1. FindBestPlacement scores every (free rectangle, orientation) pair
+|       the piece actually fits into: primarily by leftover area (Best
+|       Area Fit), then by the smaller leftover side (Best Short Side Fit)
+|       as a tiebreaker, and returns the best one.
+|    2. The piece is placed at that free rectangle's bottom-left corner.
+|    3. ReserveRect splits every free rectangle the placed piece (padded by
+|       clearance_gap on its right and top, so later pieces keep their
+|       distance from it) overlaps into whatever parts of it remain free,
+|       then drops any free rectangle now fully contained in another. This
+|       is what lets the free space left on a sheet be shaped like an L or
+|       a cross - not just a grid of rows - so a later piece can still find
+|       room in a gap a row-based packer would have written off.
+|
+]]
+
+-- True if rectangle b fully contains rectangle a.
+function RectContains(a, b)
+  return b.x <= a.x and b.y <= a.y
+     and b.x + b.width  >= a.x + a.width
+     and b.y + b.height >= a.y + a.height
+end
+
+-- True if rectangles a and b overlap (touching edges alone don't count).
+function RectsOverlap(a, b)
+  return a.x < b.x + b.width and a.x + a.width > b.x
+     and a.y < b.y + b.height and a.y + a.height > b.y
+end
+
+-- Split free rectangle f by the claimed rectangle c (assumed to overlap
+-- f), returning the (up to 4) leftover pieces of f that remain free.
+function SplitFreeRect(f, c)
+  local pieces = {}
+  if c.x > f.x then
+    pieces[#pieces + 1] = { x = f.x, y = f.y, width = c.x - f.x, height = f.height }
+  end
+  if c.x + c.width < f.x + f.width then
+    pieces[#pieces + 1] = { x = c.x + c.width, y = f.y, width = (f.x + f.width) - (c.x + c.width), height = f.height }
+  end
+  if c.y > f.y then
+    pieces[#pieces + 1] = { x = f.x, y = f.y, width = f.width, height = c.y - f.y }
+  end
+  if c.y + c.height < f.y + f.height then
+    pieces[#pieces + 1] = { x = f.x, y = c.y + c.height, width = f.width, height = (f.y + f.height) - (c.y + c.height) }
+  end
+  return pieces
+end
+
+-- Reserve the claimed rectangle c against a sheet's free rectangle list,
+-- splitting every free rectangle it overlaps into whatever remains free of
+-- it, then pruning any free rectangle now fully contained in another.
+function ReserveRect(free_rects, c)
+  local next_free = {}
+  for i = 1, #free_rects do
+    local f = free_rects[i]
+    if RectsOverlap(f, c) then
+      local pieces = SplitFreeRect(f, c)
+      for j = 1, #pieces do
+        if pieces[j].width > 0 and pieces[j].height > 0 then
+          next_free[#next_free + 1] = pieces[j]
+        end
+      end
+    else
+      next_free[#next_free + 1] = f
+    end
+  end
+
+  local pruned = {}
+  for i = 1, #next_free do
+    local contained = false
+    for j = 1, #next_free do
+      if i ~= j and RectContains(next_free[i], next_free[j]) then
+        contained = true
+        break
+      end
+    end
+    if not contained then
+      pruned[#pruned + 1] = next_free[i]
+    end
+  end
+
+  local old_count = #free_rects
+  for i = 1, math.max(old_count, #pruned) do
+    free_rects[i] = pruned[i]
+  end
+end
+
+-- Find the best-scoring placement for a width x height piece among a
+-- sheet's free rectangles. layout_mode controls which orientation(s) are
+-- allowed: "Normal" only ever considers the piece as-is, "Rotated" only
+-- ever considers it rotated 90 degrees, and anything else ("Auto", nil,
+-- or any other value) considers both and picks whichever fits best.
+-- Returns x, y, rotated, claimed (the rectangle to actually reserve via
+-- ReserveRect, padded by clearance_gap) - or nil if the piece doesn't fit
+-- into any free rectangle on this sheet at all in an allowed orientation.
+function FindBestPlacement(free_rects, width, height, clearance_gap, layout_mode)
+  local best_area, best_short = nil, nil
+  local best_x, best_y, best_rotated, best_claimed = nil, nil, nil, nil
+
+  local function Consider(w, h, rotated)
+    local claim_w, claim_h = w + clearance_gap, h + clearance_gap
+    for i = 1, #free_rects do
+      local f = free_rects[i]
+      if claim_w <= f.width and claim_h <= f.height then
+        local leftover_area  = f.width * f.height - claim_w * claim_h
+        local leftover_short = math.min(f.width - claim_w, f.height - claim_h)
+        if best_area == nil or leftover_area < best_area
+           or (leftover_area == best_area and leftover_short < best_short) then
+          best_area, best_short = leftover_area, leftover_short
+          best_x, best_y, best_rotated = f.x, f.y, rotated
+          best_claimed = { x = f.x, y = f.y, width = claim_w, height = claim_h }
+        end
+      end
+    end
+  end
+
+  if layout_mode ~= "Rotated" then
+    Consider(width, height, false)
+  end
+  if layout_mode ~= "Normal" then
+    Consider(height, width, true)
+  end
+
+  if best_x == nil then
+    return nil
+  end
+  return best_x, best_y, best_rotated, best_claimed
+end
+
+-- Places the biggest faces first so smaller ones can backfill around them.
+-- Returns a list of { index, long, short } sorted descending by long edge,
+-- then short edge, then original index. Shared by ArrangeContours and
+-- ArrangeContoursToSheets - the faces themselves are always returned in
+-- their original order regardless of this placement order.
+local function BuildPlacementOrder(faces)
+  local order = {}
+  for i = 1, #faces do
+    local bounds = faces[i].contour.BoundingBox2D
+    order[#order + 1] = {
+      index = i,
+      long  = math.max(bounds.XLength, bounds.YLength),
+      short = math.min(bounds.XLength, bounds.YLength)
+    }
+  end
+
+  table.sort(order, function(a, b)
+    if a.long ~= b.long then return a.long > b.long end
+    if a.short ~= b.short then return a.short > b.short end
+    return a.index < b.index
+  end)
+
+  return order
+end
 
 --[[  -------------- ArrangeContours --------------------------------------------------
 |
-|  Best-effort single-sheet layout, using the same shelf packing and rotation
-|  as ArrangeContoursToSheets, but restricted to one sheet. Faces are placed
-|  largest first, trying both the original and a 90 degree rotated orientation
-|  so pieces backfill gaps rather than wasting space.
+|  Best-effort single-sheet layout. Faces are placed largest first, into
+|  whichever free rectangle on the sheet fits them best (see
+|  FindBestPlacement/ReserveRect above). layout_mode controls which
+|  orientation(s) a piece may use: "Normal" never rotates a piece, "Rotated"
+|  always rotates every piece 90 degrees, and "Auto" (or nil) tries all
+|  three of "Normal", "Rotated", and letting FindBestPlacement choose per
+|  piece, then keeps whichever result actually packs best (fewest
+|  overhanging faces, then the most compact). That per-piece choice on its
+|  own is a purely greedy, no-lookahead heuristic - it can rotate one piece
+|  in a way that looks locally better but breaks a uniform-grid tiling the
+|  other pieces could have formed, so it is only trusted once it has to beat
+|  the two fixed-orientation alternatives to be picked at all.
 |
-|  A face that doesn't fit within the material at all (even rotated) is still
-|  stacked above the rest and returned rather than aborting, so it overhangs
-|  the sheet and the user can adjust the job size or move it afterwards.
+|  A face that doesn't fit anywhere on the sheet at all (even rotated) is
+|  still stacked above everything placed so far (including previous
+|  overhangs) and returned rather than aborting, so it overhangs the sheet
+|  and the user can adjust the job size or move it afterwards.
 |
 ]]
-  function ArrangeContours(faces, clearance_gap, job_width, job_height, edge_margin)
 
-    local transformed_faces = {}
+-- Computes (without moving any face) how ArrangeContours' single-sheet
+-- best-effort layout would place every face under one specific layout_mode
+-- ("Normal", "Rotated", or the per-piece "Auto" choice - never itself one of
+-- the three candidates ArrangeContours races). Returns a plan: the
+-- placements to apply, how many faces had to overhang (0 is ideal), and the
+-- vertical extent actually used (smaller is more compact) - see PickBestContoursPlan.
+local function ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  local free_rects = { { x = edge_margin, y = edge_margin, width = usable_width, height = usable_height } }
+  local overhang_y = edge_margin -- next clear y above everything placed so far, including overhangs
+  local overhang_count = 0
+  local max_extent_y = edge_margin
+  local placements = {}
 
-    if #faces == 0 then
-      return transformed_faces
-    end
+  for i = 1, #order do
+    local face = faces[order[i].index]
+    local bounds = face.contour.BoundingBox2D
+    local width = bounds.XLength
+    local height = bounds.YLength
 
-    local usable_right = job_width - edge_margin
-    local usable_top   = job_height - edge_margin
+    local x, y, rotated, claimed = FindBestPlacement(free_rects, width, height, clearance_gap, layout_mode)
 
-    -- Place the biggest faces first so the small ones can backfill around them.
-    -- This only changes the order we place in; the faces are returned in their
-    -- original order so everything downstream is unaffected.
-    local order = {}
-    for i = 1, #faces do
-      local bounds = faces[i].contour.BoundingBox2D
-      order[#order + 1] = {
-        index = i,
-        long  = math.max(bounds.XLength, bounds.YLength),
-        short = math.min(bounds.XLength, bounds.YLength)
-      }
-    end
-
-    table.sort(order, function(a, b)
-      if a.long ~= b.long then return a.long > b.long end
-      if a.short ~= b.short then return a.short > b.short end
-      return a.index < b.index
-    end)
-
-    local sheet = { shelves = {} }
-
-    for i = 1, #order do
-      local face = faces[order[i].index]
-      local bounds = face.contour.BoundingBox2D
-      local width = bounds.XLength
-      local height = bounds.YLength
-
-      local x, y, shelf = SheetClaimSpace(sheet, width, height, clearance_gap, edge_margin, usable_right, usable_top)
-      local rotated = false
-
-      if x == nil then
-        x, y, shelf = SheetClaimSpace(sheet, height, width, clearance_gap, edge_margin, usable_right, usable_top)
-        rotated = (x ~= nil)
-      end
-
-      if x == nil then
-        -- Nothing fits within the material, even rotated. Stack it above
-        -- everything else and let it overhang rather than failing.
-        local new_y = edge_margin
-        if #sheet.shelves > 0 then
-          local top = sheet.shelves[#sheet.shelves]
-          new_y = top.y + top.height + clearance_gap
-        end
-        shelf = { y = new_y, height = height, x_cursor = edge_margin + width + clearance_gap }
-        sheet.shelves[#sheet.shelves + 1] = shelf
-        x, y = edge_margin, new_y
-        rotated = false
-      end
-
-      local placed_width  = rotated and height or width
+    if x ~= nil then
+      ReserveRect(free_rects, claimed)
       local placed_height = rotated and width or height
-
-      PlaceFaceAt(face, x, y, rotated)
-
-      shelf.x_cursor = x + placed_width + clearance_gap
-      if placed_height > shelf.height then
-        shelf.height = placed_height
+      if y + placed_height + clearance_gap > overhang_y then
+        overhang_y = y + placed_height + clearance_gap
+      end
+      if y + placed_height > max_extent_y then
+        max_extent_y = y + placed_height
+      end
+      placements[#placements + 1] = { face = face, x = x, y = y, rotated = rotated }
+    else
+      -- Doesn't fit anywhere on the sheet in an orientation layout_mode
+      -- allows. Stack it above everything placed so far and let it
+      -- overhang rather than failing.
+      overhang_count = overhang_count + 1
+      local overhang_rotated = (layout_mode == "Rotated")
+      local overhang_height = overhang_rotated and width or height
+      placements[#placements + 1] = { face = face, x = edge_margin, y = overhang_y, rotated = overhang_rotated }
+      overhang_y = overhang_y + overhang_height + clearance_gap
+      if overhang_y > max_extent_y then
+        max_extent_y = overhang_y
       end
     end
-
-    for i = 1, #faces do
-      transformed_faces[#transformed_faces + 1] = faces[i]
-    end
-
-    return transformed_faces
   end
+
+  return { placements = placements, overhang_count = overhang_count, max_extent_y = max_extent_y }
+end
+
+-- Picks the best of several ArrangeContours candidate plans: fewest
+-- overhanging faces first (overhanging means it didn't fit on the sheet at
+-- all in that plan's orientation), then the most compact (smallest vertical
+-- extent actually used) as a tiebreaker.
+local function PickBestContoursPlan(candidates)
+  local best = candidates[1]
+  for i = 2, #candidates do
+    local c = candidates[i]
+    if c.overhang_count < best.overhang_count
+       or (c.overhang_count == best.overhang_count and c.max_extent_y < best.max_extent_y) then
+      best = c
+    end
+  end
+  return best
+end
+
+function ArrangeContours(faces, clearance_gap, job_width, job_height, edge_margin, layout_mode)
+  if #faces == 0 then
+    return {}
+  end
+
+  local usable_width  = job_width  - 2 * edge_margin
+  local usable_height = job_height - 2 * edge_margin
+  local order = BuildPlacementOrder(faces)
+
+  local plan
+  if layout_mode == "Normal" or layout_mode == "Rotated" then
+    plan = ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  else
+    plan = PickBestContoursPlan({
+      ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Normal"),
+      ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Rotated"),
+      ComputeContoursPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Auto"),
+    })
+  end
+
+  for i = 1, #plan.placements do
+    local p = plan.placements[i]
+    PlaceFaceAt(p.face, p.x, p.y, p.rotated)
+  end
+
+  local transformed_faces = {}
+  for i = 1, #faces do
+    transformed_faces[#transformed_faces + 1] = faces[i]
+  end
+
+  return transformed_faces
+end
 
 
 --[[  -------------- ArrangeContoursToSheets ------------------------------------------
 |
-|  Sheet Management layout. Assigns each face to a sheet and positions it, then
-|  returns the faces (in their original order) and the number of sheets required.
+|  Sheet Management layout. Assigns each face to a sheet and positions it,
+|  then returns the faces (in their original order) and the number of
+|  sheets required.
 |
-|  Shelf packing: each sheet holds a list of shelves (rows) running bottom to top.
-|  Faces are placed largest first, and for each face every open sheet is tried in
-|  turn - earliest sheet first, and in both the original and a 90 degree rotated
-|  orientation - so a face will backfill a gap on an earlier sheet rather than
-|  forcing a new one. A new sheet is only opened when nothing fits anywhere.
+|  For each face, every open sheet is tried in turn - earliest sheet first,
+|  so a face will backfill a gap on an earlier sheet rather than forcing a
+|  later one to open - via FindBestPlacement. layout_mode controls which
+|  orientation(s) a piece may use the same way it does for ArrangeContours
+|  above: "Normal" never rotates, "Rotated" always rotates, and "Auto" (or
+|  nil) tries all three of "Normal", "Rotated", and letting FindBestPlacement
+|  choose per piece, then keeps whichever result actually needs fewer sheets
+|  (the real material/cutting cost), falling back to the more compact one if
+|  they tie - see ArrangeContours' header comment for why the per-piece
+|  choice alone isn't trusted by default. A new sheet is only opened once
+|  nothing already open can fit the face at all.
 |
-|  As with ArrangeContours, a face that is too big for the material is still laid
-|  out (overhanging its sheet) rather than aborting, so the user can adjust the
-|  job size afterwards.
+|  As with ArrangeContours, a face that is too big for the material is
+|  still laid out (overhanging its sheet) rather than aborting, so the user
+|  can adjust the job size afterwards.
 |
 ]]
 
--- Try to fit a width x height box on a sheet, starting a new shelf if that is
--- what it takes. Returns x, y and the shelf it landed on, or nil if it will not
--- fit. The caller advances the shelf's cursor once the face is actually placed.
-function SheetClaimSpace(sheet, width, height, clearance_gap, edge_margin, usable_right, usable_top)
-  local shelves = sheet.shelves
+-- Computes (without moving any face) how ArrangeContoursToSheets would
+-- assign every face to sheets and position it under one specific
+-- layout_mode ("Normal", "Rotated", or the per-piece "Auto" choice - never
+-- itself one of the three candidates ArrangeContoursToSheets races). Returns
+-- a plan: the placements to apply, how many sheets that took, and the total
+-- vertical extent actually used across them (smaller is more compact) - see
+-- PickBestSheetsPlan.
+local function ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  local function NewSheet()
+    return {
+      free_rects = { { x = edge_margin, y = edge_margin, width = usable_width, height = usable_height } },
+      max_extent_y = edge_margin
+    }
+  end
 
-  for i = 1, #shelves do
-    local shelf = shelves[i]
-    -- Only the topmost shelf is allowed to grow taller; anything below it has
-    -- a shelf sitting on top of it and would overlap.
-    local vertical_fit
-    if i == #shelves then
-      vertical_fit = (shelf.y + height) <= usable_top
-    else
-      vertical_fit = height <= shelf.height
+  local sheets = { NewSheet() }
+  local placements = {}
+
+  for i = 1, #order do
+    local face = faces[order[i].index]
+    local bounds = face.contour.BoundingBox2D
+    local width = bounds.XLength
+    local height = bounds.YLength
+
+    local placed = false
+
+    -- Sheet major, so earlier sheets fill up before a later one is used.
+    for sheet_num = 1, #sheets do
+      local sheet = sheets[sheet_num]
+      local x, y, rotated, claimed = FindBestPlacement(sheet.free_rects, width, height, clearance_gap, layout_mode)
+
+      if x ~= nil then
+        ReserveRect(sheet.free_rects, claimed)
+        local placed_height = rotated and width or height
+        if y + placed_height > sheet.max_extent_y then
+          sheet.max_extent_y = y + placed_height
+        end
+        placements[#placements + 1] = { face = face, x = x, y = y, rotated = rotated, sheet_number = sheet_num }
+        placed = true
+        break
+      end
     end
 
-    if vertical_fit and ((shelf.x_cursor + width) <= usable_right) then
-      return shelf.x_cursor, shelf.y, shelf
+    if not placed then
+      -- Nothing fits on any existing sheet. Open a fresh one and try the
+      -- orientation(s) layout_mode allows there just like any other sheet
+      -- - a face can still need a 90 degree rotation to fit even on an
+      -- empty sheet, e.g. when its long edge is wider than the sheet.
+      local sheet = NewSheet()
+      sheets[#sheets + 1] = sheet
+      local sheet_num = #sheets
+
+      local x, y, rotated, claimed = FindBestPlacement(sheet.free_rects, width, height, clearance_gap, layout_mode)
+      if x == nil then
+        -- Doesn't fit on a blank sheet either way - genuinely too big for
+        -- the material. Place it at the origin (rotated if layout_mode
+        -- says so) and let it overhang rather than failing - still
+        -- reserving its own footprint so a later, smaller face doesn't
+        -- get placed on top of it.
+        rotated = (layout_mode == "Rotated")
+        x, y = edge_margin, edge_margin
+        local claim_w = (rotated and height or width) + clearance_gap
+        local claim_h = (rotated and width or height) + clearance_gap
+        claimed = { x = edge_margin, y = edge_margin, width = claim_w, height = claim_h }
+      end
+
+      ReserveRect(sheet.free_rects, claimed)
+      local placed_height = rotated and width or height
+      if y + placed_height > sheet.max_extent_y then
+        sheet.max_extent_y = y + placed_height
+      end
+      placements[#placements + 1] = { face = face, x = x, y = y, rotated = rotated, sheet_number = sheet_num }
     end
   end
 
-  -- No existing shelf works, so start a new one above the topmost.
-  local new_y = edge_margin
-  if #shelves > 0 then
-    local top = shelves[#shelves]
-    new_y = top.y + top.height + clearance_gap
+  local total_extent = 0
+  for i = 1, #sheets do
+    total_extent = total_extent + sheets[i].max_extent_y
   end
 
-  if ((new_y + height) <= usable_top) and ((edge_margin + width) <= usable_right) then
-    local shelf = { y = new_y, height = 0, x_cursor = edge_margin }
-    shelves[#shelves + 1] = shelf
-    return shelf.x_cursor, shelf.y, shelf
-  end
-
-  return nil
+  return { placements = placements, num_sheets = #sheets, total_extent = total_extent }
 end
+
+-- Picks the best of several ArrangeContoursToSheets candidate plans: fewest
+-- sheets first (the real material/cutting cost), then the most compact
+-- (smallest total vertical extent used across those sheets) as a tiebreaker.
+local function PickBestSheetsPlan(candidates)
+  local best = candidates[1]
+  for i = 2, #candidates do
+    local c = candidates[i]
+    if c.num_sheets < best.num_sheets
+       or (c.num_sheets == best.num_sheets and c.total_extent < best.total_extent) then
+      best = c
+    end
+  end
+  return best
+end
+
+function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, edge_margin, layout_mode)
+  if #faces == 0 then
+    return {}, 1
+  end
+
+  local usable_width  = job_width  - 2 * edge_margin
+  local usable_height = job_height - 2 * edge_margin
+  local order = BuildPlacementOrder(faces)
+
+  local plan
+  if layout_mode == "Normal" or layout_mode == "Rotated" then
+    plan = ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, layout_mode)
+  else
+    plan = PickBestSheetsPlan({
+      ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Normal"),
+      ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Rotated"),
+      ComputeSheetsPlan(faces, order, clearance_gap, usable_width, usable_height, edge_margin, "Auto"),
+    })
+  end
+
+  for i = 1, #plan.placements do
+    local p = plan.placements[i]
+    p.face.sheet_number = p.sheet_number
+    PlaceFaceAt(p.face, p.x, p.y, p.rotated)
+  end
+
+  local transformed_faces = {}
+  for i = 1, #faces do
+    transformed_faces[#transformed_faces + 1] = faces[i]
+  end
+
+  return transformed_faces, plan.num_sheets
+end -- ArrangeContoursToSheets
 
 -- RotationMatrix2D's angle argument isn't documented as radians or degrees, and
 -- getting it wrong would silently skew every rotated part instead of turning it.
@@ -189,103 +492,6 @@ function PlaceFaceAt(face, x, y, rotated)
   TransformFace(face, TranslationMatrix2D(Vector2D(x - bounds.MinX, y - bounds.MinY)))
 end
 
-function ArrangeContoursToSheets(faces, clearance_gap, job_width, job_height, edge_margin)
-  local transformed_faces = {}
-  if #faces == 0 then
-    return transformed_faces, 1
-  end
-
-  local usable_right = job_width - edge_margin
-  local usable_top   = job_height - edge_margin
-
-  -- Place the biggest faces first so the small ones can backfill around them.
-  -- This only changes the order we place in; the faces are returned in their
-  -- original order so everything downstream is unaffected.
-  local order = {}
-  for i = 1, #faces do
-    local bounds = faces[i].contour.BoundingBox2D
-    order[#order + 1] = {
-      index = i,
-      long  = math.max(bounds.XLength, bounds.YLength),
-      short = math.min(bounds.XLength, bounds.YLength)
-    }
-  end
-
-  table.sort(order, function(a, b)
-    if a.long ~= b.long then return a.long > b.long end
-    if a.short ~= b.short then return a.short > b.short end
-    return a.index < b.index
-  end)
-
-  local sheets = {}
-
-  local function AddSheet()
-    sheets[#sheets + 1] = { shelves = {} }
-    return sheets[#sheets]
-  end
-
-  AddSheet()
-
-  for i = 1, #order do
-    local face = faces[order[i].index]
-    local bounds = face.contour.BoundingBox2D
-    local width = bounds.XLength
-    local height = bounds.YLength
-
-    local placed = false
-
-    -- Sheet major, so earlier sheets fill up before a later one is used.
-    for sheet_num = 1, #sheets do
-      local sheet = sheets[sheet_num]
-
-      local x, y, shelf = SheetClaimSpace(sheet,width, height, clearance_gap, edge_margin, usable_right, usable_top)
-      local rotated = false
-
-      if x == nil then
-        x, y, shelf = SheetClaimSpace(sheet,height, width, clearance_gap, edge_margin, usable_right, usable_top)
-        rotated = (x ~= nil)
-      end
-
-      if x ~= nil then
-        local placed_width  = rotated and height or width
-        local placed_height = rotated and width or height
-
-        face.sheet_number = sheet_num
-        PlaceFaceAt(face, x, y, rotated)
-
-        shelf.x_cursor = x + placed_width + clearance_gap
-        if placed_height > shelf.height then
-          shelf.height = placed_height
-        end
-
-        placed = true
-        break
-      end
-    end
-
-    if not placed then
-      -- Nothing fits, which for a face larger than the material is expected.
-      -- Give it a sheet of its own and let it overhang rather than failing.
-      -- Reuse the last sheet if nothing has landed on it yet.
-      local sheet = sheets[#sheets]
-      if #sheet.shelves > 0 then
-        sheet = AddSheet()
-      end
-      sheet.shelves[1] = { y = edge_margin, height = height,
-                           x_cursor = edge_margin + width + clearance_gap }
-
-      face.sheet_number = #sheets
-      PlaceFaceAt(face, edge_margin, edge_margin, false)
-    end
-  end
-
-  for i = 1, #faces do
-    transformed_faces[#transformed_faces + 1] = faces[i]
-  end
-
-  return transformed_faces, #sheets
-end -- ArrangeContoursToSheets
-
 function SheetFindId(job, sheet_name)
   local sheet_manager = job.SheetManager
   local sheet_ids = sheet_manager:GetSheetIds()
@@ -307,8 +513,39 @@ function SetSheet(job, sheet_name)
   return true
 end
 
-function SheetEnsureExists(job, sheet_number)
-  local sheet_name = "Sheet " .. tostring(sheet_number)
+-- The sheet name to use for the sheet_num'th sheet (1-based): the gadget's
+-- starting sheet keeps its own name unchanged. For any additional sheets:
+-- if the starting name already ends in a number (e.g. "Sheet 1"), that
+-- number is simply incremented ("Sheet 2", "Sheet 3", ...) rather than
+-- tacking another one on; otherwise the sheet number is appended with a
+-- "-" instead (e.g. "Blank" -> "Blank-2").
+function SheetNameForIndex(base_name, sheet_num)
+  if sheet_num <= 1 then
+    return base_name
+  end
+
+  local prefix, base_num_str = base_name:match("^(.-)(%d+)$")
+  if prefix then
+    local base_num = tonumber(base_num_str)
+    return prefix .. tostring(base_num - 1 + sheet_num)
+  end
+
+  return base_name .. "-" .. tostring(sheet_num)
+end
+
+-- Make sure the sheet_num'th sheet (named per SheetNameForIndex, based off
+-- whichever sheet was active when the gadget started - base_sheet_id/
+-- base_sheet_name) exists, creating it if it doesn't, and makes it the
+-- active sheet either way.
+--
+-- Uses CreateNewSheet(sheet_name) so the sheet gets our name directly,
+-- rather than CreateSheets() cloning the base sheet and then hoping
+-- whatever name Vectric auto-assigns the clone happens to match what we
+-- computed. CreateNewSheet's return value isn't confirmed (it may return
+-- the new sheet's id, or nothing) so this still falls back to looking the
+-- sheet up by name afterward either way.
+function SheetEnsureExists(job, base_sheet_id, base_sheet_name, sheet_num)
+  local sheet_name = SheetNameForIndex(base_sheet_name, sheet_num)
   local sheet_manager = job.SheetManager
   local existing_id = SheetFindId(job, sheet_name)
   if existing_id ~= nil then
@@ -316,20 +553,11 @@ function SheetEnsureExists(job, sheet_number)
     return true
   end
 
-  local source_sheet_id = SheetFindId(job, "Sheet 1")
-  if source_sheet_id == nil then
-    DisplayMessageBox("Sheet 1 was not found. Cannot create " .. sheet_name .. ".")
-    return false
+  local new_id = sheet_manager:CreateNewSheet(sheet_name)
+  if new_id == nil then
+    new_id = SheetFindId(job, sheet_name)
   end
 
-  local material_block = MaterialBlock()
-  sheet_manager:CreateSheets(
-    1,
-    source_sheet_id,
-    Box2D(Point2D(0, 0), Point2D(material_block.Width, material_block.Height))
-  )
-
-  local new_id = SheetFindId(job, sheet_name)
   if new_id ~= nil then
     sheet_manager.ActiveSheetId = new_id
     return true

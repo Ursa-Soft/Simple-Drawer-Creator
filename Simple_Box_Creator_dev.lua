@@ -46,7 +46,7 @@
 -- require("mobdebug").start()
 -- want to turn this on but there's several bits of code that 
 -- need addressing first
--- require("strict")
+require("strict")
 
 G_version = "dev"                                                 
 G_subVersion = "development"                                      
@@ -60,7 +60,7 @@ G_labelsLayerName = "Labels"
 G_cutoutLayerName = "CutOut"
 G_doveTailAngleDegrees = 60
 
-local librayModule
+local libraryModule
 
 -- MotazA 16/9/2020 check if job Exists 
 ---
@@ -82,6 +82,13 @@ function main(script_path)
     DisplayMessageBox("No job loaded.")
     return false
   end
+
+  -- Remember which sheet was active when the gadget started, so all of the
+  -- gadget's sheets get named after it (this exact name for the first sheet,
+  -- then "<name>-2", "-3", ... for any additional ones) instead of always
+  -- assuming a sheet literally named "Sheet 1" exists.
+  local base_sheet_id = job.SheetManager.ActiveSheetId
+  local base_sheet_name = job.SheetManager:GetSheetName(base_sheet_id)
 
   ----------------------- Gadget Options Default Settings --------------------------------
   local options = {}
@@ -111,6 +118,7 @@ function main(script_path)
   options.no_toolpath = false
   options.create_dogbones = true
   options.useSingleSheet = false --- if true, pack everything onto one sheet and let non-fitting pieces overhang instead of creating new sheets
+  options.partLayout = "Auto"    --- "Auto" picks whichever orientation fits each part best, "Normal" never rotates parts, "Rotated" always rotates every part 90 degrees
   options.roundover_cut_depth = 0.125      --- cut depth for the finger roundover tool (box joints, no dogbones only)
 
   options.ZoomLevel = "Auto"
@@ -246,14 +254,14 @@ function main(script_path)
   end
 
   local required_sheets
-  faces, required_sheets = LayoutFacesOnSheets(job, options, faces, converted_tool_diameter)
+  faces, required_sheets = LayoutFacesOnSheets(job, options, faces, converted_tool_diameter, base_sheet_id, base_sheet_name)
   if not required_sheets then
     return false
   end
 
-  CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesToMake, converted_tool_diameter)
+  CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesToMake, converted_tool_diameter, base_sheet_name)
 
-  SetSheet(job, "Sheet 1")
+  SetSheet(job, base_sheet_name)
 
   SaveDefaultsToRegistry(options, false)
   job:Refresh2DView()
@@ -398,23 +406,25 @@ end -- CreateBoxFaces
 |  if a required sheet could not be created.
 |
 ]]
-function LayoutFacesOnSheets(job, options, faces, converted_tool_diameter)
+function LayoutFacesOnSheets(job, options, faces, converted_tool_diameter, base_sheet_id, base_sheet_name)
   local part_gap = math.max(2 * converted_tool_diameter, options.partSpacing)
-  local clampingMargin = math.max(options.clampingMargin or 0.0, 0.75)
+  -- local clampingMargin = math.max(options.clampingMargin or 0.0, 0.75)
+  local clampingMargin = options.clampingMargin or 0.5
   local required_sheets = 1
   if options.useSingleSheet then
-    -- Best effort: pack everything onto Sheet 1. Pieces that don't fit are
-    -- still laid out (overhanging the material) rather than opening a new sheet.
-    faces = ArrangeContours(faces, part_gap, job.XLength, job.YLength, clampingMargin)
+    -- Best effort: pack everything onto the starting sheet. Pieces that don't
+    -- fit are still laid out (overhanging the material) rather than opening
+    -- a new sheet.
+    faces = ArrangeContours(faces, part_gap, job.XLength, job.YLength, clampingMargin, options.partLayout)
     for i = 1, #faces do
       faces[i].sheet_number = 1
     end
   else
-    faces, required_sheets = ArrangeContoursToSheets(faces, part_gap, job.XLength, job.YLength, clampingMargin)
+    faces, required_sheets = ArrangeContoursToSheets(faces, part_gap, job.XLength, job.YLength, clampingMargin, options.partLayout)
   end
 
   for sheet_num = 1, required_sheets do
-    if not SheetEnsureExists(job, sheet_num) then
+    if not SheetEnsureExists(job, base_sheet_id, base_sheet_name, sheet_num) then
       return nil
     end
   end
@@ -429,11 +439,11 @@ end
 |  to skip toolpaths) create the pocket, fluting and cutout toolpaths for it.
 |
 ]]
-function CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesToMake, converted_tool_diameter)
+function CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesToMake, converted_tool_diameter, base_sheet_name)
   local offset_radius = 0.5 * converted_tool_diameter - options.allowance
 
   for sheet_num = 1, required_sheets do
-    local sheet_name = "Sheet " .. tostring(sheet_num)
+    local sheet_name = SheetNameForIndex(base_sheet_name, sheet_num)
     if not SetSheet(job, sheet_name) then
       return false
     end
@@ -462,7 +472,7 @@ function CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesT
         local dogboned_contours = CreateDogboneProfile(vdcontours, offset_radius)
         cutout_cadcontours = CreateTabbedCadContours(dogboned_contours, cdcontours)
       else
-        local offset_contours = vdcontours:Offset(offset_radius, offset_radius, 1, true)
+        local offset_contours = vdcontours:Offset(offset_radius, 0, 1, true)
         cutout_cadcontours = CreateTabbedCadContours(offset_contours, cdcontours)
       end
 
@@ -523,24 +533,5 @@ function CreateBoxToolpaths(job, options, faces, required_sheets, computedFacesT
     end -- if #sheet_faces > 0 then
   end -- for sheet_num = 1, required_sheets do
 
-  return true
-end
-
--- function OnToolPicker_ToolChooseButton(dialog) 
---   local tool = dialog:GetTool("ToolChooseButton")
---   if tool == nil then
--- 		MessageBox("No tool selected!")
--- 		return true
---   end
-  
---   MessageBox("User picked tool ...\n" .. tool_name .. " Diameter = " .. tool.ToolDia)
-  
---   return true
--- end
-
-
---- By putting this function in the script we don't need to create
---- individual functions unless we need specific handling
-function OnLuaButton_XXXX()
   return true
 end

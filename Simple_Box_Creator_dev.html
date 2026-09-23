@@ -33,20 +33,20 @@
         <div class="sub-panel">
           <div class="sub-panel-title">Box Dimensions</div>
           <div class="field-row" title="Side to side width of the box outside">
-            <label for="WidthField">Width</label> 
-			      <input type="number" step="any" id="WidthField" placeholder="Width of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <label for="WidthField">Width</label>
+            <input type="number" step="any" id="WidthField" placeholder="Width of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" title="Front to back depth of the box outside">
             <label for="DepthField">Depth</label>
-            <input title="Front to back depth of the box outside" type="number" step="any" id="DepthField" placeholder="Depth of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="DepthField" placeholder="Depth of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" title="Top to bottom height of the box outside">
             <label for="HeightField">Height</label>
-            <input type="number" step="any" id="HeightField" placeholder="Height of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="HeightField" placeholder="Height of Box" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" id="showHideDovetailAngle" style="display: none" title="Angle of the dovetail joint, between 45 and 85 degrees">
             <label for="DovetailAngleField">Dovetail Angle</label>
-            <input type="number" step="any" id="DovetailAngleField" placeholder="Dovetail Angle" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" step="any" id="DovetailAngleField" placeholder="Dovetail Angle" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
         </div>
       </div>
@@ -61,37 +61,36 @@
           </div>
           <div class="field-row" title="Width of the fingers">
             <label for="SideTabWidthField" id="SideJointLabel">Side joints</label>
-            <input type="text" id="SideTabWidthField" placeholder="Width of Joint" type="number" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" id="SideTabWidthField" placeholder="Width of Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div id="showHideTopBottomJoints" style="display: none">
             <div class="field-row" id="showHideLidJointWidth" title="Width of the lid fingers">
               <label for="TopTabWidthField">Lid joints</label>
-              <input type="text" id="TopTabWidthField" placeholder="Width of Lid Joint" type="number" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+              <input type="number" id="TopTabWidthField" placeholder="Width of Lid Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
             </div>
             <div class="field-row" id="showHideBottomJointWidth" title="Width of the bottom fingers">
               <label for="BottomTabWidthField">Bottom joints</label>
-              <input type="text" id="BottomTabWidthField" placeholder="Width of Bottom Joint" type="number" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+              <input type="number" id="BottomTabWidthField" placeholder="Width of Bottom Joint" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
             </div>
-
           </div>
         </div>
       </div>
 
-      <!-- Machining allowances -->
+      <!-- Machining & layout -->
       <div class="geometry-column-last">
         <div class="sub-panel">
-          <div class="sub-panel-title">Machining</div>
+          <div class="sub-panel-title">Machining &amp; Layout</div>
           <div class="field-row" title="Additional material removed in joints for better fitment, can be maximum of 1/2 the bit diameter.">
             <label for="AllowanceField">Allowance</label>
-            <input type="text" id="AllowanceField" placeholder="Allowance" type="number" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" id="AllowanceField" placeholder="Allowance" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;" onchange="onGeometryFieldChanged()"/>
           </div>
           <div class="field-row" title="Spacing between parts when laying out on the material, should be at least twice bit diameter, if less than that will use twice bit diameter instead">
             <label for="PartSpacingField">Part Spacing</label>
-            <input type="text" id="PartSpacingField" placeholder="Part Spacing" type="number" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" id="PartSpacingField" placeholder="Part Spacing" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
           </div>
           <div class="field-row" title="Margin on the edge for clamping the workpiece">
             <label for="ClampingMargin">Clamping Margin</label>
-            <input type="text" id="ClampingMargin" placeholder="Clamping Margin" type="number" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
+            <input type="number" id="ClampingMargin" placeholder="Clamping Margin" onkeydown="return event.keyCode !== 189 && event.keyCode !== 109;"/>
           </div>
           <div class="checkbox-row" id="showHideDogbones" title="When checked will create the dogbones. Warning! parts will require additional processing for joints to work">
             <input type="checkbox" class="LuaButton" id="CreateDogbones" onclick="updateRoundoverToolVisibility()" />
@@ -100,6 +99,14 @@
           <div class="checkbox-row" title="When checked, fits as many pieces as possible onto a single sheet instead of creating additional sheets. Pieces that still don't fit will be placed outside the sheet boundary.">
             <input type="checkbox" class="LuaButton" id="UseSingleSheet" />
             <label for="UseSingleSheet">Fit to single sheet</label>
+          </div>
+          <div class="field-row" title="How parts are oriented when laid out on the material. Auto picks whichever orientation (as-is or rotated 90 degrees) fits each part best. Normal never rotates parts. Rotated always rotates every part 90 degrees.">
+            <label for="PartLayoutSelect">Part Layout</label>
+            <select id="PartLayoutSelect">
+              <option value="Auto">Auto</option>
+              <option value="Normal">Normal</option>
+              <option value="Rotated">Rotated</option>
+            </select>
           </div>
         </div>
       </div>
@@ -136,7 +143,7 @@
       <div class="type-panel">
         <div class="type-panel-header">Lid Type</div>
         <div class="type-dropdown-content">
-          <select id="LidTypeSelect" onchange="onLidTypeChanged(this)" style="font-family: Tahoma, Arial, sans-serif; font-size: 15px; width: 100%;">
+          <select id="LidTypeSelect" onchange="onLidTypeChanged(this)">
             <option value="Inset">Inset</option>
             <option value="Fingers">Fingers</option>
             <option value="Flat">Flat</option>
@@ -153,7 +160,7 @@
       <div class="type-panel">
         <div class="type-panel-header">Bottom Type</div>
         <div class="type-dropdown-content">
-          <select id="BottomTypeSelect" onchange="onBottomTypeChanged(this)" style="font-family: Tahoma, Arial, sans-serif; font-size: 15px; width: 100%;">
+          <select id="BottomTypeSelect" onchange="onBottomTypeChanged(this)">
             <option value="Inset">Inset</option>
             <option value="Fingers">Fingers</option>
             <option value="Flat">Flat</option>
@@ -229,7 +236,7 @@
         </div>
         <div class="footer-option-item" style="float: right;">
           <label for="ZoomLevel" style="margin-right: 6px; vertical-align: baseline;">Zoom Level</label>
-          <select type="text" id="ZoomLevel" onchange="onZoomLevelChanged(this)" style="font-family: Tahoma, Arial, sans-serif; font-size: 15px; width: 75px; vertical-align: baseline;">
+          <select id="ZoomLevel" onchange="onZoomLevelChanged(this)">
             <option value="Auto">Auto</option>
             <option value="100%">100%</option>
             <option value="125%">125%</option>
@@ -251,9 +258,20 @@
   </div>
 
   <!-- Hidden legacy fieldset (read by Lua) -->
-  <fieldset id="theoneiwant" style="display:none;">
-    <label>Here it is!</label>
+  <!-- these are used to pass error messages from Lua to the HTML, -->
+  <!-- which then marks the field invalid and shows the message as a tooltip -->
+  <fieldset id="HiddenFields" style="display:none;">
+    <input type="checkbox" id="DimensionsChanged" value="" class="LuaButton"/>
+    <input type="text" id="InvalidWidth" value=""/>
+    <input type="text" id="InvalidDepth" value=""/>
+    <input type="text" id="InvalidHeight" value=""/>
+    <input type="text" id="InvalidDovetailAngle" value=""/>
+    <input type="text" id="InvalidAllowance" value=""/>
+    <input type="text" id="InvalidSideJointWidth" value=""/>
+    <input type="text" id="InvalidLidJointWidth" value=""/>
+    <input type="text" id="InvalidBottomJointWidth" value=""/>
   </fieldset>
+
 
 </div><!-- /page-wrapper -->
 
@@ -287,6 +305,9 @@
     }
   }
 
+  // Lid type changes which faces validation even looks at (cuttingLidJoint
+  // in ValidateJointWidths only applies when the lid uses finger joints), so
+  // this also re-runs validation the same way editing a geometry field does.
   function onLidTypeChanged(el) {
     var select = document.getElementById("LidTypeSelect");
     var selectedIndex = select ? select.selectedIndex : 0;
@@ -305,8 +326,11 @@
 
     var lidCheckItem = document.getElementById("MakeLidCheckItem");
     if (lidCheckItem) { lidCheckItem.style.display = (selectedIndex === 3) ? "none" : "block"; }
+
+    onGeometryFieldChanged();
   }
 
+  // Same reasoning as onLidTypeChanged, for the bottom.
   function onBottomTypeChanged(el) {
     var select = document.getElementById("BottomTypeSelect");
     var selectedIndex = select ? select.selectedIndex : 0;
@@ -325,18 +349,123 @@
 
     var bottomCheckItem = document.getElementById("MakeBottomCheckItem");
     if (bottomCheckItem) { bottomCheckItem.style.display = (selectedIndex === 3) ? "none" : "block"; }
+
+    onGeometryFieldChanged();
   }
 
-  // Shows or hides the Bottom and Lid joint width fields.
+  // Width/Depth/Height/joint widths/dovetail angle/allowance are plain number
+  // fields with no LuaButton class, so edits don't reach Lua on their own.
+  // Clicking the hidden DimensionsChanged checkbox both flips its value and
+  // fires the LuaButton click that notifies Lua.
+  function onGeometryFieldChanged() {
+    var dimensionsChanged = document.getElementById("DimensionsChanged");
+    if (dimensionsChanged) { dimensionsChanged.click(); }
+  }
+
+  // Maps each hidden "InvalidXxx" text field (set by Lua to an error message,
+  // or "" when valid) to the field it should mark invalid (red outline) and
+  // give that message as a tooltip. Add an entry here whenever another field
+  // needs this same invalid-message wiring - no new callback required.
+  var g_invalidFieldMap = {
+    "InvalidWidth":            "WidthField",
+    "InvalidDepth":            "DepthField",
+    "InvalidHeight":           "HeightField",
+    "InvalidDovetailAngle":    "DovetailAngleField",
+    "InvalidAllowance":        "AllowanceField",
+    "InvalidSideJointWidth":   "SideTabWidthField",
+    "InvalidLidJointWidth":    "TopTabWidthField",
+    "InvalidBottomJointWidth": "BottomTabWidthField"
+  };
+
+  // Each field's own tooltip before any invalid-message override, so it can
+  // be restored once the field becomes valid again. None of these fields
+  // carry their own title normally (the descriptive tooltip lives on the
+  // surrounding .field-row), but this is captured rather than assumed so a
+  // field that ever gains one keeps it.
+  var g_originalTitles = {};
+
+  // Marks/unmarks the field paired with messageFieldId based on that hidden
+  // field's current text: empty means valid, anything else is the error
+  // message to show as the field's own tooltip.
+  function updateInvalidFieldFlag(messageFieldId) {
+    var fieldId = g_invalidFieldMap[messageFieldId];
+    var field = fieldId && document.getElementById(fieldId);
+    var messageField = document.getElementById(messageFieldId);
+    if (!field || !messageField) { return; }
+
+    if (!(fieldId in g_originalTitles)) {
+      g_originalTitles[fieldId] = field.getAttribute("title");
+    }
+
+    var message = messageField.value;
+    var className = field.className.replace(" invalid", "").replace("invalid", "");
+
+    if (message) {
+      field.className = className + " invalid";
+      field.title = message;
+    } else {
+      field.className = className;
+      var originalTitle = g_originalTitles[fieldId];
+      if (originalTitle === null) {
+        field.removeAttribute("title");
+      } else {
+        field.title = originalTitle;
+      }
+    }
+  }
+
+  // Lua writes an error message (or "") into these hidden text fields
+  // directly through the dialog bridge, which doesn't fire onchange
+  // (programmatic changes never do). IE7 has no MutationObserver either, so
+  // poll for the messages instead.
+  var g_lastInvalidMessage = {};
+  function pollInvalidFieldFlags() {
+    for (var messageFieldId in g_invalidFieldMap) {
+      var messageField = document.getElementById(messageFieldId);
+      var message = messageField ? messageField.value : "";
+      if (message !== g_lastInvalidMessage[messageFieldId]) {
+        g_lastInvalidMessage[messageFieldId] = message;
+        updateInvalidFieldFlag(messageFieldId);
+      }
+    }
+  }
+  setInterval(pollInvalidFieldFlags, 300);
+
+  // ToolNameField is a <span> that Lua's tool picker updates directly when
+  // the user picks a tool - not a form field, so there's no onchange to hook,
+  // and (same reasoning as above) no event fires from that programmatic
+  // update either. Poll its text instead: the tool's diameter feeds into the
+  // joint-width/dovetail tool-fit checks, so picking a new tool should also
+  // trip DimensionsChanged and re-run validation.
+  var g_lastToolName = null;
+  function pollToolNameChanged() {
+    var toolNameField = document.getElementById("ToolNameField");
+    if (!toolNameField) { return; }
+    var currentName = toolNameField.innerHTML;
+    if (currentName !== g_lastToolName) {
+      g_lastToolName = currentName;
+      onGeometryFieldChanged();
+    }
+  }
+  setInterval(pollToolNameChanged, 300);
+
+  // Shows or hides the Bottom and Lid joint width fields. Whether Bottom/Lid
+  // share the Side field or get their own changes which fields validation
+  // even looks at (see ValidateJointWidths in DisplayDialog.xlua), so this
+  // also re-runs validation the same way editing a geometry field does.
   function onShowAllWidthsChanged(checkbox) {
     var el = document.getElementById("showHideTopBottomJoints");
     if (el) { el.style.display = checkbox.checked ? "block" : "none"; }
 	  var elSideJoint = document.getElementById("SideJointLabel")
 	  if (elSideJoint) {elSideJoint.innerHTML=checkbox.checked?"Side Joints":"All Joints"}
+    onGeometryFieldChanged();
   }
 
   // Dogbones only apply to box (finger) joints, not dovetail joints.
-  // The dovetail angle is the reverse: only shown for dovetail joints.
+  // The dovetail angle is the reverse: only shown for dovetail joints - and
+  // ValidateDovetailAngle/ValidateJointWidths in DisplayDialog.xlua both
+  // branch on box vs dovetail, so this also re-runs validation the same way
+  // editing a geometry field does.
   function onJointTypeChanged() {
     var boxRadio = document.getElementById("TabTypeRadio1");
     var isBoxJoint = boxRadio && boxRadio.checked;
@@ -348,6 +477,7 @@
     if (dovetailAngleRow) { dovetailAngleRow.style.display = isBoxJoint ? "none" : "block"; }
 
     updateRoundoverToolVisibility();
+    onGeometryFieldChanged();
   }
 
   // The finger roundover tool only applies to box (finger) joints that are not using dogbones.
@@ -392,6 +522,8 @@
 
     var allWidths = document.getElementById("AllJointWidths");
     if (allWidths) { onShowAllWidthsChanged(allWidths); }
+
+    for (var invalidFieldId in g_invalidFieldMap) { updateInvalidFieldFlag(invalidFieldId); }
 
     onJointTypeChanged();
   }, 100);
