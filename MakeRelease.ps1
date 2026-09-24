@@ -1,11 +1,46 @@
 # PowerShell Script: Update G_version and Create Release ZIP
 param (
     $version = $null,
-    $subversion = $null
+    $subversion = $null,
+    $configFile = $null
 )
 
 Write-Host ""
 Write-Host ""
+
+# Load configuration (moduleToCreate, mainLuaFile, mainHTMLFile, extra files to release)
+# so this script can be reused across different gadgets/projects without editing the script itself.
+if (-not $configFile) {
+    $configFile = Join-Path $PSScriptRoot "MakeRelease.config.json"
+}
+
+if (-not (Test-Path $configFile)) {
+    Write-Error "Configuration file not found: $configFile"
+    exit 1
+}
+
+try {
+    $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
+}
+catch {
+    Write-Error "Failed to parse configuration file '$configFile': $_"
+    exit 1
+}
+
+foreach ($requiredField in @("ModuleToCreate", "MainLuaFile", "MainHTMLFile")) {
+    if (-not $config.$requiredField) {
+        Write-Error "Configuration file '$configFile' is missing required field '$requiredField'."
+        exit 1
+    }
+}
+
+$moduleToCreate = $config.ModuleToCreate
+$mainLuaFile = $config.MainLuaFile
+$mainHTMLFile = $config.MainHTMLFile
+
+# manually add extra files here (in the config file), but it will automatically include the main lua
+# and html file based on the config above, so no need to add those to FilesToRelease
+$filesToRelease = @($mainLuaFile, $mainHTMLFile) + @($config.FilesToRelease)
 
 # Remember the last version/subversion used, so they can be suggested next time.
 $releaseVerFile = "ReleaseVer.txt"
@@ -65,24 +100,6 @@ else {
 }
 
 Save-ReleaseVer -filePath $releaseVerFile -version $version -subversion $subversion
-
-# Files to include in the release ZIP (relative or absolute paths)
-$moduleToCreate = "Simple_Box_Creator"
-$mainLuaFile = $moduleToCreate + "_dev.lua"
-$mainHTMLFile = $moduleToCreate + "_dev.html"
-
-# manually add extra files here, but it will automatically include the main lua and html file based on the module name and version, so no need to add those here
-$filesToRelease = @(
-    $mainLuaFile,
-    $mainHTMLFile,
-    "CreateFaces.xlua",
-    "Helpers.xlua",
-    "Dovetails.xlua",
-    "SheetArrangement.xlua",
-    "DisplayDialog.xlua",
-    "stylesheets",
-    "images"
-)
 
 # Release directory
 $releaseDir = "release"

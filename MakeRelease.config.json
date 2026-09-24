@@ -1,0 +1,14 @@
+{
+    "ModuleToCreate": "Simple_Box_Creator",
+    "MainLuaFile": "Simple_Box_Creator_dev.lua",
+    "MainHTMLFile": "Simple_Box_Creator_dev.html",
+    "FilesToRelease": [
+        "CreateFaces.xlua",
+        "Helpers.xlua",
+        "Dovetails.xlua",
+        "SheetArrangement.xlua",
+        "DisplayDialog.xlua",
+        "stylesheets",
+        "images"
+    ]
+}
