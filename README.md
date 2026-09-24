@@ -29,11 +29,11 @@ To do this follow these steps
 
 5. now put the repo in this code location with the following command
 
-   `git clone https://github.com/gremlin529/Vectric-Box-Gadget.git`
+   `git clone https://github.com/Ursa-Soft/Simple-Drawer-Creator.git Simple_Drawer_Creator`
 
 6. this puts a copy of the current code in your Vectric gadgets directory and you can now actually start up vectric and you'll see a new gadget called “Vectric-Box-Gadget” and under that you can run it
 
-7. type `cd vectric-box-gadget`
+7. type `cd Simple_Drawer_Creator`
 
 8. `code .`
 
