@@ -11,7 +11,7 @@ Write-Host ""
 # Load configuration (moduleToCreate, mainLuaFile, mainHTMLFile, extra files to release)
 # so this script can be reused across different gadgets/projects without editing the script itself.
 if (-not $configFile) {
-    $configFile = Join-Path $PSScriptRoot "MakeRelease.config.json"
+    $configFile = Join-Path $PSScriptRoot "Release.config.json"
 }
 
 if (-not (Test-Path $configFile)) {
